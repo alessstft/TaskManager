@@ -155,13 +155,14 @@ struct GPUInfo {
     total_memory: Option<f64>, // в ГБ
     used_memory: Option<f64>,  // в ГБ
     free_memory: Option<f64>,  // в ГБ
+    temperature: Option<u32>,  // в °C
 }
 
 /// Пытаемся получить информацию о GPU через nvidia-smi (для NVIDIA‑графики).
 fn get_gpu_info() -> Result<Vec<GPUInfo>, Box<dyn std::error::Error>> {
     let output = Command::new("nvidia-smi")
         .args(&[
-            "--query-gpu=name,memory.total,memory.used,memory.free",
+            "--query-gpu=name,memory.total,memory.used,memory.free,temperature.gpu",
             "--format=csv,noheader,nounits",
         ])
         .output();
@@ -172,17 +173,19 @@ fn get_gpu_info() -> Result<Vec<GPUInfo>, Box<dyn std::error::Error>> {
             let mut gpus = Vec::new();
             for line in output_str.lines() {
                 let parts: Vec<&str> = line.split(',').map(|s| s.trim()).collect();
-                if parts.len() == 4 {
+                if parts.len() == 5 {
                     let model = parts[0].to_string();
                     let total: f64 = parts[1].parse().unwrap_or(0.0);
                     let used: f64 = parts[2].parse().unwrap_or(0.0);
                     let free: f64 = parts[3].parse().unwrap_or(0.0);
+                    let temperature: u32 = parts[4].parse().unwrap_or(0);
                     // Переводим из MB в ГБ
                     gpus.push(GPUInfo {
                         model,
                         total_memory: Some(total / 1024.0),
                         used_memory: Some(used / 1024.0),
                         free_memory: Some(free / 1024.0),
+                        temperature: Some(temperature),
                     });
                 }
             }
@@ -195,7 +198,6 @@ fn get_gpu_info() -> Result<Vec<GPUInfo>, Box<dyn std::error::Error>> {
     Err("nvidia-smi не найден или вернул ошибку".into())
 }
 
-/// Для Windows: получение информации о встроенной (интегрированной) графике через wmic.
 #[cfg(target_os = "windows")]
 fn get_integrated_gpu_model_windows() -> Result<String, Box<dyn std::error::Error>> {
     let output = Command::new("wmic")
@@ -216,17 +218,60 @@ fn get_integrated_gpu_model_windows() -> Result<String, Box<dyn std::error::Erro
     Err("Информация о встроенной графике не найдена".into())
 }
 
-/// Для Linux: получение информации о встроенной графике через lspci (фильтруем Intel).
+
+#[cfg(target_os = "windows")]
+fn get_cpu_integrated_gpu_model_windows() -> Result<String, Box<dyn std::error::Error>> {
+    let output = Command::new("wmic")
+        .args(&["path", "win32_VideoController", "get", "Name"])
+        .output()?;
+    let output_str = String::from_utf8_lossy(&output.stdout);
+    // Пропускаем заголовок
+    for line in output_str.lines().skip(1) {
+        let name = line.trim();
+        if !name.is_empty() &&
+           (name.to_lowercase().contains("intel") ||
+            name.to_lowercase().contains("amd") ||
+            name.to_lowercase().contains("uhd"))
+        {
+            return Ok(name.to_string());
+        }
+    }
+    Err("Интегрированная видеокарта в процессоре не найдена".into())
+}
+
 #[cfg(target_os = "linux")]
-fn get_integrated_gpu_model_linux() -> Result<String, Box<dyn std::error::Error>> {
+fn get_cpu_integrated_gpu_model_linux() -> Result<String, Box<dyn std::error::Error>> {
     let output = Command::new("lspci").output()?;
     let output_str = String::from_utf8_lossy(&output.stdout);
     for line in output_str.lines() {
-        if line.contains("VGA compatible controller") && line.to_lowercase().contains("intel") {
+        if line.contains("VGA compatible controller") &&
+           (line.to_lowercase().contains("intel") || line.to_lowercase().contains("amd"))
+        {
             return Ok(line.to_string());
         }
     }
-    Err("Информация о встроенной графике не найдена".into())
+    Err("Интегрированная видеокарта в процессоре не найдена".into())
+}
+
+#[cfg(target_os = "macos")]
+fn get_cpu_integrated_gpu_model_macos() -> Result<String, Box<dyn std::error::Error>> {
+    let output = Command::new("system_profiler")
+        .args(&["SPDisplaysDataType"])
+        .output()?;
+    if output.status.success() {
+        let output_str = String::from_utf8_lossy(&output.stdout);
+        for line in output_str.lines() {
+            if line.contains("Chipset Model:") {
+                let model = line.trim().trim_start_matches("Chipset Model:").trim();
+                if model.to_lowercase().contains("intel") ||
+                   model.to_lowercase().contains("amd")
+                {
+                    return Ok(model.to_string());
+                }
+            }
+        }
+    }
+    Err("Интегрированная видеокарта в процессоре не найдена".into())
 }
 
 
@@ -335,6 +380,11 @@ fn main() {
             } else {
                 println!("   🆓 Осталось: (не поддерживается напрямую)");
             }
+            if let Some(temp) = gpu.temperature {
+                println!("   🌡 Температура: {}°C", temp);
+            } else {
+                println!("   🌡 Температура: (не поддерживается напрямую)");
+            }
         }
     } else {
         // Если дискретная GPU не найдена, пробуем получить модель встроенной графики
@@ -364,28 +414,55 @@ fn main() {
         }
         #[cfg(target_os = "macos")]
         {
-            let output = Command::new("system_profiler")
-                            .args(&["SPDisplaysDataType"])
-                            .output();
-            if let Ok(output) = output {
-                if output.status.success() {
-                    let output_str = String::from_utf8_lossy(&output.stdout);
-                    for line in output_str.lines() {
-                        if line.contains("Chipset Model:") {
-                            let model = line.trim().trim_start_matches("Chipset Model:").trim();
-                            println!("   🏷 Наименование: {}", model);
-                            println!("   🎮 Кол-во памяти: (не поддерживается напрямую)");
-                            println!("   📊 Выделено памяти: (не поддерживается напрямую)");
-                            println!("   🆓 Осталось: (не поддерживается напрямую)");
-                            break;
-                        }
-                    }
-                } else {
-                    println!("   ❌ Информация о видеокарте не найдена.");
-                }
-            } else {
-                println!("   ❌ Информация о видеокарте не найдена.");
+            match get_cpu_integrated_gpu_model_macos() {
+                Ok(model) => {
+                    println!("   🏷 Наименование: {}", model);
+                    println!("   🎮 Кол-во памяти: (не поддерживается напрямую)");
+                    println!("   📊 Выделено памяти: (не поддерживается напрямую)");
+                    println!("   🆓 Осталось: (не поддерживается напрямую)");
+                },
+                Err(_) => println!("   ❌ Информация о видеокарте не найдена."),
             }
+        }
+    }
+
+    // Если дискретная GPU не найдена или требуется дополнительно отобразить информацию об интегрированной графике в процессоре
+    #[cfg(target_os = "windows")]
+    {
+        match get_cpu_integrated_gpu_model_windows() {
+            Ok(model) => {
+                println!("   🏷 Интегрированная видеокарта (CPU): {}", model);
+                println!("   🎮 Кол-во памяти: (не поддерживается напрямую)");
+                println!("   📊 Выделено памяти: (не поддерживается напрямую)");
+                println!("   🆓 Осталось: (не поддерживается напрямую)");
+            },
+            Err(e) => println!("   ❌ Информация о видеокарте (CPU) не найдена: {}", e),
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        match get_cpu_integrated_gpu_model_linux() {
+            Ok(model) => {
+                println!("   🏷 Интегрированная видеокарта (CPU): {}", model);
+                println!("   🎮 Кол-во памяти: (не поддерживается напрямую)");
+                println!("   📊 Выделено памяти: (не поддерживается напрямую)");
+                println!("   🆓 Осталось: (не поддерживается напрямую)");
+            },
+            Err(e) => println!("   ❌ Информация о видеокарте (CPU) не найдена: {}", e),
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        match get_cpu_integrated_gpu_model_macos() {
+            Ok(model) => {
+                println!("   🏷 Интегрированная видеокарта (CPU): {}", model);
+                println!("   🎮 Кол-во памяти: (не поддерживается напрямую)");
+                println!("   📊 Выделено памяти: (не поддерживается напрямую)");
+                println!("   🆓 Осталось: (не поддерживается напрямую)");
+            },
+            Err(e) => println!("   ❌ Информация о видеокарте (CPU) не найдена: {}", e),
         }
     }
 
@@ -409,15 +486,18 @@ fn main() {
     #[cfg(target_os = "windows")]
     {    
         let output = Command::new("powershell")
-            .args(&["-Command", "Get-Service | Select-Object Name, Status | ConvertTo-Json -Compress"])
+            .args(&[
+                "-Command",
+                "Get-CimInstance Win32_Service | Select-Object ProcessId, Name, Status | ConvertTo-Json -Compress"
+            ])
             .output()
             .expect("Не удалось выполнить команду PowerShell");
-        
+    
         if output.status.success() {
             let output_str = String::from_utf8_lossy(&output.stdout);
             let services: Vec<serde_json::Value> = serde_json::from_str(&output_str).expect("Не удалось распарсить JSON");
             for service in services {
-                println!("   {}: {}", service["Name"], service["Status"]);
+                println!("   [{}] {}: {}", service["ProcessId"], service["Name"], service["Status"]);
             }
         } else {
             println!("   ❌ Не удалось получить информацию о службах.");
@@ -430,13 +510,14 @@ fn main() {
             .args(&["list-units", "--type=service", "--no-pager", "--plain", "--no-legend"])
             .output()
             .expect("Не удалось выполнить команду systemctl");
-        
+    
         if output.status.success() {
             let output_str = String::from_utf8_lossy(&output.stdout);
             for line in output_str.lines() {
                 let parts: Vec<&str> = line.split_whitespace().collect();
                 if parts.len() > 3 {
-                    println!("   {}: {}", parts[0], parts[3]);
+                    // PID не доступен напрямую, поэтому выводим [N/A]
+                    println!("   [N/A] {}: {}", parts[0], parts[3]);
                 }
             }
         } else {
@@ -470,3 +551,4 @@ fn main() {
     let mut input = String::new();
     io::stdin().read_line(&mut input).expect("Не удалось прочитать ввод");
 }
+
