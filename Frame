@@ -1,0 +1,57 @@
+import tkinter as tk
+from tkinter import ttk
+
+def create_process_manager():
+    root = tk.Tk()
+    root.title("Диспетчер задач")
+    
+    tab_control = ttk.Notebook(root)
+    processes_tab = ttk.Frame(tab_control)
+    performance_tab = ttk.Frame(tab_control)
+    services_tab = ttk.Frame(tab_control)
+    
+    tab_control.add(processes_tab, text='Процессы')
+    tab_control.add(performance_tab, text='Производительность')
+    tab_control.add(services_tab, text='Службы')
+    tab_control.pack(expand=1, fill='both')
+    
+    headers_frame = ttk.Frame(processes_tab)
+    headers_frame.pack(fill='x', padx=5, pady=5)
+    
+    headers = ['Имя', 'ЦП', 'Память', 'Диск', 'Сеть', 'GPU', 'Энерг-ие']
+    for i, header in enumerate(headers):
+        header_label = ttk.Label(headers_frame, text=header, padding=5)
+        header_label.grid(row=0, column=i, sticky='w')
+        headers_frame.grid_columnconfigure(i, weight=1)
+    
+    process_frame = ttk.Frame(processes_tab)
+    process_frame.pack(fill='both', expand=True, padx=5)
+    
+    processes = [
+        "*Первое запущенное приложение*",
+        "*Второе запущенное приложение*",
+        "*Третье запущенное приложение*"
+    ]
+    
+    for i, process in enumerate(processes):
+        process_label = ttk.Label(process_frame, text=process, padding=5)
+        process_label.grid(row=i, column=0, sticky='w')
+    
+    #цвет фона
+    style = ttk.Style()
+    style.configure('TNotebook', background='#FFFFFF')
+    style.configure('TFrame', background='#FFFFFF') #фиолетовый
+    style.configure('TLabel', background='#FFFFFF', foreground='black') # цвет текста
+    
+    root.configure(bg='#8B008B')
+    
+    window_controls = ttk.Frame(root)
+    
+    window_controls.pack(side='top', anchor='ne', padx=5, pady=5)
+    
+    
+    return root
+
+if __name__ == "__main__":
+    app = create_process_manager()
+    app.mainloop()
