@@ -1,0 +1,163 @@
+import ctypes
+import tkinter as tk
+from tkinter import ttk
+
+# Загрузка скомпилированной библиотеки (укажите правильное имя файла библиотеки)
+lib = ctypes.CDLL("/Users/sip/Yandex.Disk.localized/Learning/Тестирование программных модулей/Менеджер задач/sys_info_fn/target/release/libsys_info_fn.dylib")  # для Linux; для Windows может быть "libsysteminfo.dll"
+
+# Определение структур для данных, возвращаемых библиотекой
+
+class CpuStaticInfo(ctypes.Structure):
+    _fields_ = [
+        ("brand", ctypes.c_char_p),   # строка
+        ("usage", ctypes.c_float),      # загрузка (%)
+        ("frequency", ctypes.c_double), # частота (ГГц)
+        ("core_count", ctypes.c_size_t) # количество ядер
+    ]
+
+class MemoryStaticInfo(ctypes.Structure):
+    _fields_ = [
+        ("total", ctypes.c_uint64),     # в КБ
+        ("used", ctypes.c_uint64),
+        ("available", ctypes.c_uint64)
+    ]
+
+class DiskStaticInfo(ctypes.Structure):
+    _fields_ = [
+        ("name", ctypes.c_char_p),         # имя диска
+        ("total_space", ctypes.c_uint64),    # общий объём (байт)
+        ("available_space", ctypes.c_uint64) # свободное место (байт)
+    ]
+
+class DiskStaticInfoArray(ctypes.Structure):
+    _fields_ = [
+        ("data", ctypes.POINTER(DiskStaticInfo)),
+        ("len", ctypes.c_size_t)
+    ]
+
+class ProcessInfo(ctypes.Structure):
+    _fields_ = [
+        ("pid", ctypes.c_char_p),       # идентификатор процесса (строка)
+        ("name", ctypes.c_char_p),      # имя процесса
+        ("cpu_usage", ctypes.c_float),  # загрузка CPU (%)
+        ("memory_mb", ctypes.c_double), # потребление памяти (МБ)
+        ("read_kb", ctypes.c_double),   # прочитано (КБ)
+        ("written_kb", ctypes.c_double) # записано (КБ)
+    ]
+
+class ProcessInfoArray(ctypes.Structure):
+    _fields_ = [
+        ("data", ctypes.POINTER(ProcessInfo)),
+        ("len", ctypes.c_size_t)
+    ]
+
+# Прописываем прототипы функций из библиотеки
+lib.get_cpu_static_info.restype = ctypes.POINTER(CpuStaticInfo)
+lib.free_cpu_static_info.argtypes = [ctypes.POINTER(CpuStaticInfo)]
+
+lib.get_memory_static_info.restype = MemoryStaticInfo
+
+lib.get_disk_static_info_array.restype = DiskStaticInfoArray
+lib.free_disk_static_info_array.argtypes = [DiskStaticInfoArray]
+
+lib.start_process_collector.restype = ctypes.c_bool
+
+lib.get_process_info_array.restype = ProcessInfoArray
+lib.free_process_info_array.argtypes = [ProcessInfoArray]
+
+lib.stop_process_collector.restype = ctypes.c_bool
+
+# Функция для обновления статической информации (CPU, память, диски)
+def refresh_static_info():
+    # Получаем информацию о процессоре
+    cpu_ptr = lib.get_cpu_static_info()
+    cpu_info = cpu_ptr.contents
+    cpu_brand = cpu_info.brand.decode("utf-8") if cpu_info.brand else "N/A"
+    cpu_text = (f"CPU: {cpu_brand}, Загрузка: {cpu_info.usage:.1f}%, "
+                f"Частота: {cpu_info.frequency:.2f} ГГц, Ядер: {cpu_info.core_count}")
+    cpu_label.config(text=cpu_text)
+    lib.free_cpu_static_info(cpu_ptr)
+
+    # Получаем информацию о памяти
+    mem_info = lib.get_memory_static_info()
+    mem_text = (f"Память: Всего {mem_info.total} ГБ, Используется {mem_info.used} ГБ, "
+               f"Доступно {mem_info.available} ГБ")
+    memory_label.config(text=mem_text)
+
+    # Получаем информацию о дисках
+    disk_array = lib.get_disk_static_info_array()
+    disks_text = ""
+    for i in range(disk_array.len):
+        disk = disk_array.data[i]
+        disk_name = disk.name.decode("utf-8") if disk.name else "N/A"
+        disks_text += (f"{disk_name}: Всего {disk.total_space} ГБ, "
+                       f"Доступно {disk.available_space} ГБ\n")
+    disk_label.config(text=disks_text)
+    lib.free_disk_static_info_array(disk_array)
+
+# Функция для обновления информации о процессах (вызывается каждую секунду)
+def refresh_process_info():
+    proc_array = lib.get_process_info_array()
+    # Очищаем текущий список
+    for item in process_tree.get_children():
+        process_tree.delete(item)
+    # Добавляем данные по каждому процессу
+    for i in range(proc_array.len):
+        proc = proc_array.data[i]
+        pid = proc.pid.decode("utf-8") if proc.pid else "N/A"
+        name = proc.name.decode("utf-8") if proc.name else "N/A"
+        process_tree.insert("", "end", values=(
+            pid,
+            name,
+            f"{proc.cpu_usage:.1f}",
+            f"{proc.memory_mb:.2f}",
+            f"{proc.read_kb:.1f}",
+            f"{proc.written_kb:.1f}"
+        ))
+    lib.free_process_info_array(proc_array)
+    # Обновляем список каждые 1000 мс
+    root.after(1000, refresh_process_info)
+
+# Инициализация фонового сбора информации о процессах
+if lib.start_process_collector():
+    print("Сбор информации о процессах запущен")
+else:
+    print("Сбор информации уже запущен")
+
+# Создаём главное окно
+root = tk.Tk()
+root.title("Task Manager GUI Test")
+
+# Метки для статической информации
+cpu_label = tk.Label(root, text="Информация о CPU", font=("Arial", 12))
+cpu_label.pack(pady=5)
+
+memory_label = tk.Label(root, text="Информация о памяти", font=("Arial", 12))
+memory_label.pack(pady=5)
+
+disk_label = tk.Label(root, text="Информация о дисках", font=("Arial", 12), justify="left")
+disk_label.pack(pady=5)
+
+# Кнопка для обновления статической информации
+refresh_button = tk.Button(root, text="Обновить статическую информацию", command=refresh_static_info)
+refresh_button.pack(pady=5)
+
+# Таблица (Treeview) для отображения информации о процессах
+columns = ("PID", "Имя", "CPU %", "Память (МБ)", "Чтение (КБ)", "Запись (КБ)")
+process_tree = ttk.Treeview(root, columns=columns, show="headings", height=10)
+for col in columns:
+    process_tree.heading(col, text=col)
+    process_tree.column(col, width=100, anchor="center")
+process_tree.pack(pady=10, fill="both", expand=True)
+
+# Запуск цикла обновления информации о процессах
+refresh_process_info()
+
+# Корректное завершение работы: останавливаем сбор процессов при закрытии окна
+def on_closing():
+    if lib.stop_process_collector():
+        print("Сбор информации остановлен")
+    root.destroy()
+
+root.protocol("WM_DELETE_WINDOW", on_closing)
+root.mainloop()
