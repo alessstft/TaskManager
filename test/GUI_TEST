@@ -1,32 +1,36 @@
 import ctypes
 import tkinter as tk
-from tkinter import ttk
+from tkinter import ttk, messagebox
 
-# Загрузка скомпилированной библиотеки (укажите правильное имя файла библиотеки)
-lib = ctypes.CDLL("/Users/sip/Yandex.Disk.localized/Learning/Тестирование программных модулей/Менеджер задач/sys_info_fn/target/release/libsys_info_fn.dylib")  # для Linux; для Windows может быть "libsysteminfo.dll"
+# Загрузка скомпилированной библиотеки (укажите правильный путь к DLL)
+lib_path = r"C:\Users\ilyap\YandexDisk\Learning\Тестирование программных модулей\Менеджер задач\sys_info_fn\target\release\sys_info_fn.dll"
+lib = ctypes.CDLL(lib_path)
 
-# Определение структур для данных, возвращаемых библиотекой
-
+# Определение C-совместимых структур согласно вашему lib.rs
 class CpuStaticInfo(ctypes.Structure):
     _fields_ = [
-        ("brand", ctypes.c_char_p),   # строка
-        ("usage", ctypes.c_float),      # загрузка (%)
-        ("frequency", ctypes.c_double), # частота (ГГц)
-        ("core_count", ctypes.c_size_t) # количество ядер
+        ("brand", ctypes.c_char_p),
+        ("usage", ctypes.c_float),
+        ("frequency", ctypes.c_double),
+        ("core_count", ctypes.c_size_t),
+        ("work_time", ctypes.c_longlong),
+        ("process", ctypes.c_longlong),
     ]
 
 class MemoryStaticInfo(ctypes.Structure):
     _fields_ = [
-        ("total", ctypes.c_uint64),     # в КБ
+        ("total", ctypes.c_uint64),
         ("used", ctypes.c_uint64),
-        ("available", ctypes.c_uint64)
+        ("available", ctypes.c_uint64),
+        ("speed", ctypes.c_uint64),
+        ("format", ctypes.c_char_p),
     ]
 
 class DiskStaticInfo(ctypes.Structure):
     _fields_ = [
-        ("name", ctypes.c_char_p),         # имя диска
-        ("total_space", ctypes.c_uint64),    # общий объём (байт)
-        ("available_space", ctypes.c_uint64) # свободное место (байт)
+        ("name", ctypes.c_char_p),
+        ("total_space", ctypes.c_uint64),
+        ("available_space", ctypes.c_uint64),
     ]
 
 class DiskStaticInfoArray(ctypes.Structure):
@@ -37,12 +41,12 @@ class DiskStaticInfoArray(ctypes.Structure):
 
 class ProcessInfo(ctypes.Structure):
     _fields_ = [
-        ("pid", ctypes.c_char_p),       # идентификатор процесса (строка)
-        ("name", ctypes.c_char_p),      # имя процесса
-        ("cpu_usage", ctypes.c_float),  # загрузка CPU (%)
-        ("memory_mb", ctypes.c_double), # потребление памяти (МБ)
-        ("read_kb", ctypes.c_double),   # прочитано (КБ)
-        ("written_kb", ctypes.c_double) # записано (КБ)
+        ("pid", ctypes.c_char_p),
+        ("name", ctypes.c_char_p),
+        ("cpu_usage", ctypes.c_float),
+        ("memory_mb", ctypes.c_double),
+        ("read_kb", ctypes.c_double),
+        ("written_kb", ctypes.c_double),
     ]
 
 class ProcessInfoArray(ctypes.Structure):
@@ -51,7 +55,21 @@ class ProcessInfoArray(ctypes.Structure):
         ("len", ctypes.c_size_t)
     ]
 
-# Прописываем прототипы функций из библиотеки
+class NetworksStaticInfo(ctypes.Structure):
+    _fields_ = [
+        ("name", ctypes.c_char_p),
+        ("ipv4", ctypes.c_char_p),
+        ("send", ctypes.c_uint64),
+        ("recive", ctypes.c_uint64),
+    ]
+
+class NetworksStaticInfoArray(ctypes.Structure):
+    _fields_ = [
+        ("data", ctypes.POINTER(NetworksStaticInfo)),
+        ("len", ctypes.c_size_t)
+    ]
+
+# Прописаны прототипы функций из библиотеки
 lib.get_cpu_static_info.restype = ctypes.POINTER(CpuStaticInfo)
 lib.free_cpu_static_info.argtypes = [ctypes.POINTER(CpuStaticInfo)]
 
@@ -67,93 +85,152 @@ lib.free_process_info_array.argtypes = [ProcessInfoArray]
 
 lib.stop_process_collector.restype = ctypes.c_bool
 
-# Функция для обновления статической информации (CPU, память, диски)
+lib.get_networks_static_info_array.restype = NetworksStaticInfoArray
+lib.free_networks_static_info_array.argtypes = [NetworksStaticInfoArray]
+
+
+# lib.kill_process.argtypes = [ctypes.c_uint32]
+# lib.kill_process.restype = ctypes.c_int
+
+# Функция завершения процесса по PID
+def kill_process_by_id():
+    pid_str = kill_entry.get().strip()
+    if not pid_str:
+        messagebox.showerror("Ошибка", "Введите номер процесса")
+        return
+    try:
+        pid_int = int(pid_str)
+    except ValueError:
+        messagebox.showerror("Ошибка", "Введите корректный номер процесса")
+        return
+    result = lib.kill_process(ctypes.c_uint32(pid_int))
+    if result == 0:
+        messagebox.showinfo("Успех", f"Процесс {pid_str} успешно завершён.")
+    else:
+        messagebox.showerror("Ошибка", f"Не удалось завершить процесс {pid_str}.")
+
+# Обновление статической информации (CPU, память, диски)
 def refresh_static_info():
-    # Получаем информацию о процессоре
+    # CPU
     cpu_ptr = lib.get_cpu_static_info()
     cpu_info = cpu_ptr.contents
     cpu_brand = cpu_info.brand.decode("utf-8") if cpu_info.brand else "N/A"
-    cpu_text = (f"CPU: {cpu_brand}, Загрузка: {cpu_info.usage:.1f}%, "
-                f"Частота: {cpu_info.frequency:.2f} ГГц, Ядер: {cpu_info.core_count}")
+    cpu_text = (
+        f"CPU: {cpu_brand}\nЗагрузка: {cpu_info.usage:.1f}%\n"
+        f"Частота: {cpu_info.frequency:.2f} ГГц\nЯдер: {cpu_info.core_count}\n"
+        f"Время работы: {cpu_info.work_time} сек\nПроцессов: {cpu_info.process}"
+    )
     cpu_label.config(text=cpu_text)
     lib.free_cpu_static_info(cpu_ptr)
-
-    # Получаем информацию о памяти
+    
+    # Память
     mem_info = lib.get_memory_static_info()
-    mem_text = (f"Память: Всего {mem_info.total} ГБ, Используется {mem_info.used} ГБ, "
-               f"Доступно {mem_info.available} ГБ")
+    mem_format = mem_info.format.decode("utf-8") if mem_info.format else "N/A"
+    mem_text = (
+        f"Память:\nВсего: {mem_info.total} ГБ\nИспользуется: {mem_info.used} ГБ\n"
+        f"Доступно: {mem_info.available} ГБ\nСкорость: {mem_info.speed} МГц\nТип: {mem_format}"
+    )
     memory_label.config(text=mem_text)
-
-    # Получаем информацию о дисках
+    
+    # Диски
     disk_array = lib.get_disk_static_info_array()
     disks_text = ""
     for i in range(disk_array.len):
         disk = disk_array.data[i]
         disk_name = disk.name.decode("utf-8") if disk.name else "N/A"
-        disks_text += (f"{disk_name}: Всего {disk.total_space} ГБ, "
-                       f"Доступно {disk.available_space} ГБ\n")
+        disks_text += f"{disk_name}:\nВсего: {disk.total_space} ГБ, Доступно: {disk.available_space} ГБ\n"
     disk_label.config(text=disks_text)
     lib.free_disk_static_info_array(disk_array)
+    
+    root.after(1000, refresh_static_info)
 
-# Функция для обновления информации о процессах (вызывается каждую секунду)
+# Обновление списка процессов
 def refresh_process_info():
     proc_array = lib.get_process_info_array()
-    # Очищаем текущий список
     for item in process_tree.get_children():
         process_tree.delete(item)
-    # Добавляем данные по каждому процессу
     for i in range(proc_array.len):
         proc = proc_array.data[i]
         pid = proc.pid.decode("utf-8") if proc.pid else "N/A"
         name = proc.name.decode("utf-8") if proc.name else "N/A"
         process_tree.insert("", "end", values=(
-            pid,
-            name,
-            f"{proc.cpu_usage:.1f}",
-            f"{proc.memory_mb:.2f}",
-            f"{proc.read_kb:.1f}",
-            f"{proc.written_kb:.1f}"
+            pid, name, f"{proc.cpu_usage:.1f}",
+            f"{proc.memory_mb:.2f}", f"{proc.read_kb:.1f}", f"{proc.written_kb:.1f}"
         ))
     lib.free_process_info_array(proc_array)
-    # Обновляем список каждые 1000 мс
-    root.after(1000, refresh_process_info)
+    root.after(3000, refresh_process_info)
 
-# Инициализация фонового сбора информации о процессах
+# Обновление информации о сети
+def refresh_network_info():
+    net_array = lib.get_networks_static_info_array()
+    networks_text = ""
+    for i in range(net_array.len):
+        net = net_array.data[i]
+        net_name = net.name.decode("utf-8") if net.name else "N/A"
+        net_ipv4 = net.ipv4.decode("utf-8") if net.ipv4 else "N/A"
+        networks_text += (
+            f"{net_name} / {net_ipv4}\n"
+            f"Отправлено: {net.send} байт, Получено: {net.recive} байт\n\n"
+        )
+    network_label.config(text=networks_text)
+    lib.free_networks_static_info_array(net_array)
+    root.after(3000, refresh_network_info)
+
+# Запуск фонового сбора информации о процессах
 if lib.start_process_collector():
     print("Сбор информации о процессах запущен")
 else:
     print("Сбор информации уже запущен")
 
-# Создаём главное окно
+# Создание главного окна в стиле Windows 11
 root = tk.Tk()
-root.title("Task Manager GUI Test")
+root.title("Task Manager - Windows 11")
+root.geometry("900x600")
+root.option_add("*Font", ("Segoe UI", 10))
 
-# Метки для статической информации
-cpu_label = tk.Label(root, text="Информация о CPU", font=("Arial", 12))
-cpu_label.pack(pady=5)
+# Верхняя область: статическая информация
+top_frame = tk.Frame(root, bg="#f0f0f0")
+top_frame.pack(side=tk.TOP, fill=tk.X, padx=10, pady=10)
 
-memory_label = tk.Label(root, text="Информация о памяти", font=("Arial", 12))
-memory_label.pack(pady=5)
+cpu_label = tk.Label(top_frame, text="Информация о CPU", bg="#f0f0f0", anchor="w", justify="left")
+cpu_label.pack(side=tk.LEFT, padx=10)
 
-disk_label = tk.Label(root, text="Информация о дисках", font=("Arial", 12), justify="left")
-disk_label.pack(pady=5)
+memory_label = tk.Label(top_frame, text="Информация о памяти", bg="#f0f0f0", anchor="w", justify="left")
+memory_label.pack(side=tk.LEFT, padx=30)
 
-# Кнопка для обновления статической информации
-refresh_button = tk.Button(root, text="Обновить статическую информацию", command=refresh_static_info)
-refresh_button.pack(pady=5)
+disk_label = tk.Label(top_frame, text="Информация о дисках", bg="#f0f0f0", anchor="w", justify="left")
+disk_label.pack(side=tk.LEFT, padx=30)
 
-# Таблица (Treeview) для отображения информации о процессах
+network_label = tk.Label(top_frame, text="Информация о сети", bg="#f0f0f0", anchor="w", justify="left")
+network_label.pack(side=tk.LEFT, padx=30)
+
+# Нижняя область: список процессов
+bottom_frame = tk.Frame(root, bg="#f0f0f0")
+bottom_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+
 columns = ("PID", "Имя", "CPU %", "Память (МБ)", "Чтение (КБ)", "Запись (КБ)")
-process_tree = ttk.Treeview(root, columns=columns, show="headings", height=10)
+process_tree = ttk.Treeview(bottom_frame, columns=columns, show="headings")
 for col in columns:
     process_tree.heading(col, text=col)
     process_tree.column(col, width=100, anchor="center")
-process_tree.pack(pady=10, fill="both", expand=True)
+process_tree.pack(fill=tk.BOTH, expand=True)
 
-# Запуск цикла обновления информации о процессах
+# Форма для ввода PID и кнопка "Убить"
+kill_frame = tk.Frame(root, bg="#f0f0f0")
+kill_frame.pack(fill=tk.X, padx=10, pady=5)
+kill_label = tk.Label(kill_frame, text="Введите PID для завершения процесса:", bg="#f0f0f0")
+kill_label.pack(side=tk.LEFT, padx=5)
+kill_entry = tk.Entry(kill_frame, width=10)
+kill_entry.pack(side=tk.LEFT, padx=5)
+kill_button = tk.Button(kill_frame, text="Убить", command=kill_process_by_id)
+kill_button.pack(side=tk.LEFT, padx=5)
+
+# Запуск периодического обновления информации
+refresh_static_info()
 refresh_process_info()
+refresh_network_info()
 
-# Корректное завершение работы: останавливаем сбор процессов при закрытии окна
+# Корректное завершение: остановка фонового сбора
 def on_closing():
     if lib.stop_process_collector():
         print("Сбор информации остановлен")
