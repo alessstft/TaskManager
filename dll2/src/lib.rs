@@ -1,5 +1,5 @@
-use sysinfo::{System, SystemExt, CpuExt, ProcessExt, DiskExt, ComponentExt};
-use std::ffi::{CString, CStr};
+use sysinfo::{System, SystemExt, CpuExt, ProcessExt, DiskExt, NetworksExt,NetworkExt};
+use std::ffi::CString;
 use std::os::raw::c_char;
 use std::sync::{
     Arc,
@@ -9,7 +9,9 @@ use std::sync::{
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 use lazy_static::lazy_static;
-
+use local_ipaddress;
+use std::process::Command;
+use serde::Deserialize;
 // ===================== СТРУКТУРЫ ДЛЯ СТАТИЧЕСКОЙ ИНФОРМАЦИИ =====================
 
 #[repr(C)]
@@ -18,13 +20,40 @@ pub struct CpuStaticInfo {
     pub usage: f32,          // загрузка (в %)
     pub frequency: f64,      // частота (ГГц)
     pub core_count: usize,   // количество ядер
+    pub work_time: i64,      // время работы
+    pub process: i64,        // количество процессов
+}
+
+#[cfg(target_os = "windows")]
+#[derive(Deserialize, Debug)]
+struct Win32PhysicalMemory {
+    #[serde(rename = "Speed")]
+    speed: u32,
+    #[serde(rename = "MemoryType")]
+    memory_type: Option<u32>,
+    #[serde(rename = "SMBIOSMemoryType")]
+    smbios_memory_type: Option<u32>,
 }
 
 #[repr(C)]
 pub struct MemoryStaticInfo {
-    pub total: u64,      // общий объём (КБ)
-    pub used: u64,       // используемая память (КБ)
-    pub available: u64,  // доступная память (КБ)
+    pub total: u64,         // общий объём (КБ)
+    pub used: u64,          // используемая память (КБ)
+    pub available: u64,     // доступная память (КБ)
+    pub speed: u64,         // скорость памяти (МГц)
+    pub format: *mut c_char,// формат памяти (например, "DDR4")
+}
+
+#[repr(C)]
+pub struct MemoryInfo {
+    pub speed: u32,
+    pub memory_format: *mut c_char,
+}
+
+#[repr(C)]
+pub struct MemoryInfoArray {
+    pub data: *mut MemoryInfo,
+    pub len: usize,
 }
 
 #[repr(C)]
@@ -40,6 +69,19 @@ pub struct DiskStaticInfoArray {
     pub len: usize,
 }
 
+#[repr(C)]
+pub struct NetworksStaticInfo {
+    pub name: *mut c_char,
+    pub ipv4: *mut c_char,
+    pub send: u64,
+    pub recive: u64,
+}
+
+#[repr(C)]
+pub struct NetworksStaticInfoArray {
+    pub data: *mut NetworksStaticInfo,
+    pub len: usize,
+}
 // ===================== ФУНКЦИИ ДЛЯ СТАТИЧЕСКОЙ ИНФОРМАЦИИ =====================
 
 #[no_mangle]
@@ -61,12 +103,27 @@ pub extern "C" fn get_cpu_static_info() -> *mut CpuStaticInfo {
     } else {
         0.0
     };
-    let core_count = sys.cpus().len();
+    
+    let work_time= if let Some(cpu) = sys.cpus().first() {
+        sys.uptime() as i64
+    } else {
+        0
+    };
+
+    let process= if let Some(cpu) = sys.cpus().first() {
+        sys.processes().len() as i64
+    } else {
+        0
+    };
+
+    let core_count = num_cpus::get_physical();
     let info = CpuStaticInfo {
         brand: CString::new(brand).unwrap().into_raw(),
         usage,
         frequency,
+        process,
         core_count,
+        work_time,
     };
     Box::into_raw(Box::new(info))
 }
@@ -82,14 +139,118 @@ pub extern "C" fn free_cpu_static_info(info: *mut CpuStaticInfo) {
     }
 }
 
+#[cfg(target_os = "windows")]
+fn internal_get_ram_info() -> Result<Vec<MemoryInfo>, Box<dyn std::error::Error>> {
+    let output = Command::new("powershell")
+        .args(&[
+            "-Command",
+            "Get-CimInstance Win32_PhysicalMemory | Select-Object Speed, MemoryType, SMBIOSMemoryType | ConvertTo-Json -Compress"
+        ])
+        .output()?;
+    
+    if !output.status.success() {
+        return Err("PowerShell command failed".into());
+    }
+    
+    let output_str = String::from_utf8_lossy(&output.stdout);
+    let json_str = if output_str.trim_start().starts_with('[') {
+        output_str.to_string()
+    } else {
+        format!("[{}]", output_str)
+    };
+    
+    let memories: Vec<Win32PhysicalMemory> = serde_json::from_str(&json_str)?;
+    
+    let mem_info: Vec<MemoryInfo> = memories.into_iter().map(|m| {
+        let fmt = get_modern_memory_format(m.smbios_memory_type, m.memory_type);
+        let format_cstr = CString::new(fmt).unwrap();
+        MemoryInfo { speed: m.speed, memory_format: format_cstr.into_raw() }
+    }).collect();
+    
+    Ok(mem_info)
+}
+
+#[cfg(target_os = "windows")]
+#[no_mangle]
+pub extern "C" fn get_ram_info_array() -> MemoryInfoArray {
+    match internal_get_ram_info() {
+        Ok(mut vec) => {
+            let len = vec.len();
+            let data_ptr = vec.as_mut_ptr();
+            std::mem::forget(vec);
+            MemoryInfoArray { data: data_ptr, len }
+        },
+        Err(_) => MemoryInfoArray { data: std::ptr::null_mut(), len: 0 },
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn free_memory_info_array(array: MemoryInfoArray) {
+    if array.data.is_null() { return; }
+    unsafe {
+        let vec = Vec::from_raw_parts(array.data, array.len, array.len);
+        for mem in vec {
+            if !mem.memory_format.is_null() {
+                let _ = CString::from_raw(mem.memory_format);
+            }
+        }
+    }
+}
+
+fn get_modern_memory_format(smbios: Option<u32>, memory_type: Option<u32>) -> &'static str {
+    if let Some(smbios_val) = smbios {
+        if smbios_val != 0 {
+            match smbios_val {
+                20 => "DDR",
+                21 => "DDR2",
+                22 => "DDR2 FB-DIMM",
+                24 => "DDR3",
+                26 => "DDR4",
+                34 => "DDR5",
+                _  => "Unknown",
+            }
+        } else {
+            if let Some(mem_val) = memory_type {
+                match mem_val {
+                    20 => "DDR",
+                    21 => "DDR2",
+                    22 => "DDR2 FB-DIMM",
+                    24 => "DDR3",
+                    _  => "Unknown",
+                }
+            } else {
+                "Unknown"
+            }
+        }
+    } else {
+        if let Some(mem_val) = memory_type {
+            match mem_val {
+                20 => "DDR",
+                21 => "DDR2",
+                22 => "DDR2 FB-DIMM",
+                24 => "DDR3",
+                _  => "Unknown",
+            }
+        } else {
+            "Unknown"
+        }
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn get_memory_static_info() -> MemoryStaticInfo {
     let mut sys = System::new_all();
     sys.refresh_all();
+    // Пример значений: скорость 2400 МГц и формата DDR4 (используем smbios = Some(26))
+    let mem_speed = 2400;
+    let mem_format_str = get_modern_memory_format(Some(26), None);
+    let mem_format = CString::new(mem_format_str).unwrap();
     MemoryStaticInfo {
-        total: sys.total_memory() / (1024*1024*1024),      // перевод из КБ в МБ
-        used: sys.used_memory() / (1024*1024*1024),          // перевод из КБ в МБ
-        available: sys.available_memory() / (1024*1024*1024) // перевод из КБ в МБ
+        total: sys.total_memory() / (1024 * 1024 * 1024),      // перевод из КБ в ГБ
+        used: sys.used_memory() / (1024 * 1024 * 1024),          // перевод из КБ в ГБ
+        available: sys.available_memory() / (1024 * 1024 * 1024),// перевод из КБ в ГБ
+        speed: mem_speed,
+        format: mem_format.into_raw(),
     }
 }
 
@@ -126,6 +287,47 @@ pub extern "C" fn free_disk_static_info_array(array: DiskStaticInfoArray) {
     }
 }
 
+#[no_mangle]
+pub extern "C" fn get_networks_static_info_array() -> NetworksStaticInfoArray {
+    let mut sys = System::new_all();
+    sys.refresh_networks();
+    let networks = sys.networks();
+    // Подсчёт количества элементов через итератор
+    let len = networks.iter().count();
+    let mut vec: Vec<NetworksStaticInfo> = Vec::with_capacity(len);
+    // Получаем локальный IP-адрес (используем local_ipaddress = "0.1.2")
+    let local_ip = local_ipaddress::get().unwrap_or("0.0.0.0".to_string());
+    for (iface_name, network) in networks {
+        let name = iface_name.to_string();
+        vec.push(NetworksStaticInfo {
+            name: CString::new(name).unwrap().into_raw(),
+            ipv4: CString::new(local_ip.clone()).unwrap().into_raw(),
+            send: network.transmitted(),
+            recive: network.received(),
+        });
+    }
+    let data_ptr = vec.as_mut_ptr();
+    std::mem::forget(vec);
+    NetworksStaticInfoArray { data: data_ptr, len }
+}
+
+#[no_mangle]
+pub extern "C" fn free_networks_static_info_array(array: NetworksStaticInfoArray) {
+    if array.data.is_null() {
+        return;
+    }
+    unsafe {
+        let vec = Vec::from_raw_parts(array.data, array.len, array.len);
+        for network in vec {
+            if !network.name.is_null() {
+                let _ = CString::from_raw(network.name);
+            }
+            if !network.ipv4.is_null() {
+                let _ = CString::from_raw(network.ipv4);
+            }
+        }
+    }
+}
 // ===================== ФУНКЦИИ ДЛЯ ПОДБОРА ИНФОРМАЦИИ О ПРОЦЕССАХ (ПОТОКОВЫЙ МОДУЛЬ) =====================
 
 /// C‑совместимая структура для информации о процессе.
@@ -288,10 +490,42 @@ pub extern "C" fn free_process_info_array(array: ProcessInfoArray) {
         }
     }
 }
+//ДЛЯ WINDOWS
+//ВАНЯ, допиши выше зависимости и добавь их в cargo.toml. Функцию
+// #[unsafe(no_mangle)] 
+// pub extern "C" fn kill_process(pid: u32) -> i32 {
+//     unsafe {
+//         let process_handle: HANDLE = OpenProcess(PROCESS_TERMINATE, 0, pid);
+//         if process_handle.is_null() {
+//             return -1;  // Ошибка: не удалось открыть процесс
+//         }
+
+//         // Завершаем процесс
+//         if TerminateProcess(process_handle, 1) == 0 {
+//             CloseHandle(process_handle); 
+//             return -2;  // Ошибка: не удалось завершить процесс
+//         }
+
+//         CloseHandle(process_handle);
+//         return 0;
+//     }
+// }
+
+//ДЛЯ MAC OS
+/// Функция для завершения процесса по идентификатору.
+// #[no_mangle]
+// pub extern "C" fn kill_process(pid: u32) -> i32 {
+//     let result = unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) };
+//     if result == 0 {
+//         0 
+//     } else {
+//         -1 
+//     }
+// }
 
 /// Функция для освобождения памяти, выделенной функциями, возвращающими C‑строку.
 #[no_mangle]
 pub extern "C" fn free_string(s: *mut c_char) {
     if s.is_null() { return; }
-    unsafe { CString::from_raw(s); }
+    unsafe { let _ = CString::from_raw(s); }
 }
