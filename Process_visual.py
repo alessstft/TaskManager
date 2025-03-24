@@ -36,7 +36,7 @@ tree = ttk.Treeview(frame1, columns=columns, show="headings")
 
 for col in columns:
     tree.heading(col, text=col)
-    tree.column(col, width=80, anchor="center")
+    tree.column(col, width=80, anchor="w")
 
 tree.pack(fill=tk.BOTH, expand=True)
 
