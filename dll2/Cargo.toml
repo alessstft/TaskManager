@@ -14,3 +14,4 @@ lazy_static = "1.4"
 libc = "0.2"
 num_cpus = "1.15"
 local_ipaddress = "0.1.2"
+winapi = { version = "0.3", features = ["winuser", "processthreadsapi", "psapi", "handleapi"] }
