@@ -2,7 +2,6 @@ import tkinter as tk
 from tkinter import ttk, Canvas, messagebox
 from tkinter import *
 
-# Функция для завершения выбранного процесса
 def end_task():
     selected_item = tree.selection()
     if selected_item:
@@ -10,7 +9,6 @@ def end_task():
     else:
         messagebox.showwarning("Ошибка", "Выберите задачу для завершения")
 
-# Функция для обработки клика по кругу
 def on_circle_click(metric):
     messagebox.showinfo("Информация", f"{metric['label']}: {metric['value']}")
 
@@ -40,7 +38,6 @@ def update_canvas(event=None):
 
         canvas.tag_bind(f"circle_{i}", "<Button-1>", lambda event, m=metric: on_circle_click(m))
 
-# Создаём главное окно
 root = tk.Tk()
 root.title("Диспетчер задач")
 root.geometry("800x500")
@@ -49,7 +46,6 @@ root.configure(bg="#2d2d2d")
 icon = PhotoImage(file = "icon.png")
 root.iconphoto(False, icon)
 
-# Стили
 style = ttk.Style()
 style.theme_use("clam")
 style.configure("TNotebook", background="#2d2d2d", borderwidth=0)
@@ -65,8 +61,6 @@ notebook.pack(fill=tk.BOTH, expand=True)
 # Вкладка "Процессы"
 frame1 = tk.Frame(notebook, bg="#872187")
 notebook.add(frame1, text="Процессы")
-
-# Таблица процессов
 columns = ("Имя", "ЦП", "Память", "Диск", "Сеть", "GPU", "Энерг-ие")
 tree = ttk.Treeview(frame1, columns=columns, show="headings")
 
@@ -76,11 +70,9 @@ for col in columns:
 
 tree.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 
-# Кнопка завершения задачи
 end_task_btn = tk.Button(frame1, text="Завершить задачу", bg="#5c2d5c", fg="white", font=("Arial", 12, "bold"), command=end_task)
 end_task_btn.pack(pady=10)
 
-# Добавление данных
 processes = [
     ("Первое запущенное приложение", "2%", "150MB", "0MB/s", "0Kb/s", "0%", "Низкое"),
     ("Второе запущенное приложение", "5%", "300MB", "1MB/s", "20Kb/s", "5%", "Среднее"),
@@ -94,11 +86,9 @@ for process in processes:
 frame2 = tk.Frame(notebook, bg="#872187")
 notebook.add(frame2, text="Производительность")
 
-# Холст для рисования
 canvas = Canvas(frame2, bg="#872187", highlightthickness=0)
 canvas.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
 
-# Данные для метрик
 metrics = [
     {"label": "ЦП", "value": "15%"},
     {"label": "Память", "value": "1.2GB"},
@@ -109,11 +99,9 @@ metrics = [
 
 canvas.bind("<Configure>", update_canvas)
 
-# Вкладка "Службы"
 frame3 = tk.Frame(notebook, bg="#872187")
 notebook.add(frame3, text="Службы")
 
-# Таблица служб
 columns_services = ("Имя", "ИД процесса", "Описание", "Состояние", "Группа")
 tree_services = ttk.Treeview(frame3, columns=columns_services, show="headings")
 
@@ -123,7 +111,6 @@ for col in columns_services:
 
 tree_services.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 
-# Добавление тестовых данных для служб
 services_data = [
     ("Service A", "101", "Системный процесс", "Работает", "Система"),
     ("Service B", "205", "Фоновая служба", "Остановлено", "Фоновые"),
