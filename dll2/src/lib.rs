@@ -290,22 +290,40 @@ pub extern "C" fn free_disk_static_info_array(array: DiskStaticInfoArray) {
 #[no_mangle]
 pub extern "C" fn get_networks_static_info_array() -> NetworksStaticInfoArray {
     let mut sys = System::new_all();
+    sys.refresh_all();  // Обновляем все данные
     sys.refresh_networks();
+    sys.refresh_networks_list();
     let networks = sys.networks();
-    // Подсчёт количества элементов через итератор
-    let len = networks.iter().count();
-    let mut vec: Vec<NetworksStaticInfo> = Vec::with_capacity(len);
-    // Получаем локальный IP-адрес (используем local_ipaddress = "0.1.2")
+    
+    let mut vec: Vec<NetworksStaticInfo> = Vec::new();
     let local_ip = local_ipaddress::get().unwrap_or("0.0.0.0".to_string());
+    
     for (iface_name, network) in networks {
-        let name = iface_name.to_string();
-        vec.push(NetworksStaticInfo {
-            name: CString::new(name).unwrap().into_raw(),
-            ipv4: CString::new(local_ip.clone()).unwrap().into_raw(),
-            send: network.transmitted(),
-            recive: network.received(),
-        });
+        // Пропускаем виртуальные и неактивные интерфейсы
+        if iface_name.contains("vEthernet") || 
+           iface_name.contains("VirtualBox") || 
+           iface_name.contains("VMware") ||
+           iface_name.contains("Loopback") {
+            continue;
+        }
+        
+        // Получаем текущие значения
+        let transmitted = network.transmitted();
+        let received = network.received();
+        
+        // Если интерфейс активен (есть хоть какой-то трафик)
+        if transmitted > 0 || received > 0 {
+            let name = iface_name.to_string();
+            vec.push(NetworksStaticInfo {
+                name: CString::new(name).unwrap().into_raw(),
+                ipv4: CString::new(local_ip.clone()).unwrap().into_raw(),
+                send: transmitted,
+                recive: received,
+            });
+        }
     }
+    
+    let len = vec.len();
     let data_ptr = vec.as_mut_ptr();
     std::mem::forget(vec);
     NetworksStaticInfoArray { data: data_ptr, len }
