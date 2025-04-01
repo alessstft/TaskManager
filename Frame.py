@@ -47,7 +47,7 @@ class TaskManager:
         self.notebook = ttk.Notebook(self.root)
         self.notebook.pack(fill=tk.BOTH, expand=True)
 
-# Вкладка "Процессы"
+        # Вкладка "Процессы"
         self.processes_frame = tk.Frame(self.notebook, bg="#872187")
         self.notebook.add(self.processes_frame, text="Процессы")
         self._setup_processes_tab()
@@ -108,6 +108,7 @@ class TaskManager:
         self.canvas.bind("<Configure>", self._update_canvas)
 
     def _setup_services_tab(self):
+        # Таблица для отображения сервисов
         columns = ("Имя", "ИД процесса", "Описание", "Состояние", "Группа")
         self.services_tree = ttk.Treeview(self.services_frame, columns=columns, show="headings")
         
@@ -135,6 +136,8 @@ class TaskManager:
             if all(x is not None for x in (self._cpu_info, self._memory_info, self._process_info)):
                 self._update_processes(self._process_info)
                 self._update_performance_metrics()
+        # Также обновляем отображение сервисов
+        self._update_services()
 
     def _update_processes(self, processes):
         """Обновляет таблицу процессов"""
@@ -217,6 +220,25 @@ class TaskManager:
         ]
         self._update_canvas()
 
+    def _update_services(self):
+        """Обновляет таблицу сервисов"""
+        services = self.system_monitor.get_services_info()
+        # Сохраняем выбранные элементы
+        selected_items = self.services_tree.selection()
+        selected_names = [self.services_tree.item(item)['values'][0] for item in selected_items]
+        self.services_tree.delete(*self.services_tree.get_children())
+        for svc in services:
+            values = (
+                svc['name'],
+                svc['process_id'],
+                svc['description'],
+                svc['status'],
+                svc['group']
+            )
+            item = self.services_tree.insert("", tk.END, values=values)
+            if svc['name'] in selected_names:
+                self.services_tree.selection_add(item)
+
     def _update_canvas(self, event=None):
         """Обновляет отрисовку кругов на канвасе"""
         self.canvas.delete("all")
@@ -273,4 +295,4 @@ if __name__ == "__main__":
     icon = PhotoImage(file="icon.png")
     root.iconphoto(False, icon)
     app = TaskManager(root)
-root.mainloop()
+    root.mainloop()
