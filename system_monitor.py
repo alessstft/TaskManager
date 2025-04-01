@@ -67,8 +67,22 @@ class NetworksStaticInfoArray(Structure):
         ("len", c_size_t),
     ]
 
+# Новые структуры для информации о сервисах (для Windows)
+class ServiceInfo(Structure):
+    _fields_ = [
+        ("process_id", ctypes.c_uint),
+        ("name", c_char_p),
+        ("status", c_char_p),
+    ]
+
+class ServiceInfoArray(Structure):
+    _fields_ = [
+        ("data", POINTER(ServiceInfo)),
+        ("len", c_size_t),
+    ]
+
 class SystemMonitor:
-    def __init__(self, dll_path: str = "./dll2/target/release/sys_info_fn.dll"):
+    def __init__(self, dll_path: str = "sys_info_fn/target/release/sys_info_fn.dll"):
         self.dll = ctypes.CDLL(dll_path)
         self._setup_dll_functions()
         self._running = False
@@ -88,6 +102,10 @@ class SystemMonitor:
         # Функции для управления процессами
         self.dll.start_process_collector.restype = c_int
         self.dll.stop_process_collector.restype = c_int
+
+        # Настройка функций для работы с сервисами (Windows)
+        self.dll.get_services_info_array.restype = ServiceInfoArray
+        self.dll.free_services_info_array.argtypes = [ServiceInfoArray]
         
     def start_monitoring(self, update_interval: float = 1.0):
         """Запускает мониторинг системы"""
@@ -248,7 +266,24 @@ class SystemMonitor:
         self.dll.free_networks_static_info_array(network_array)
         self._last_update_time = current_time
         return networks
-        
+
+    # Новый метод для получения информации о сервисах (Windows)
+    def get_services_info(self) -> List[Dict]:
+        """Получает информацию о сервисах (только для Windows)"""
+        service_array = self.dll.get_services_info_array()
+        services = []
+        for i in range(service_array.len):
+            service = service_array.data[i]
+            services.append({
+                "process_id": service.process_id,
+                "name": service.name.decode('utf-8') if service.name else "Unknown",
+                "status": service.status.decode('utf-8') if service.status else "Unknown",
+                "description": "",  # Дополнительной информации нет
+                "group": "",        # Дополнительной информации нет
+            })
+        self.dll.free_services_info_array(service_array)
+        return services
+
     def get_disk_info(self) -> List[Dict]:
         """Публичный метод для получения информации о дисках"""
         return self._get_disk_info()
@@ -268,4 +303,4 @@ class SystemMonitor:
 
     def __del__(self):
         """Деструктор для очистки ресурсов"""
-        self.stop_monitoring() 
+        self.stop_monitoring()
