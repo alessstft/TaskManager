@@ -82,6 +82,22 @@ pub struct NetworksStaticInfoArray {
     pub data: *mut NetworksStaticInfo,
     pub len: usize,
 }
+
+
+#[cfg(target_os = "windows")]
+#[repr(C)]
+pub struct ServiceInfo {
+    pub process_id: u32,    // Идентификатор процесса службы
+    pub name: *mut c_char,  // Имя службы
+    pub status: *mut c_char,// Статус службы
+}
+
+#[cfg(target_os = "windows")]
+#[repr(C)]
+pub struct ServiceInfoArray {
+    pub data: *mut ServiceInfo,
+    pub len: usize,
+}
 // ===================== ФУНКЦИИ ДЛЯ СТАТИЧЕСКОЙ ИНФОРМАЦИИ =====================
 
 #[no_mangle]
@@ -541,6 +557,61 @@ pub extern "C" fn free_process_info_array(array: ProcessInfoArray) {
 //     }
 // }
 
+#[cfg(target_os = "windows")]
+#[no_mangle]
+pub extern "C" fn get_services_info_array() -> ServiceInfoArray {
+    let output = Command::new("powershell")
+        .args(&[
+            "-Command",
+            "Get-CimInstance Win32_Service | Select-Object ProcessId, Name, Status | ConvertTo-Json -Compress"
+        ])
+        .output()
+        .expect("Не удалось выполнить команду PowerShell");
+
+    if output.status.success() {
+        let output_str = String::from_utf8_lossy(&output.stdout);
+        let services: Vec<serde_json::Value> = serde_json::from_str(&output_str)
+            .expect("Не удалось распарсить JSON");
+        let len = services.len();
+        let mut vec: Vec<ServiceInfo> = Vec::with_capacity(len);
+        for service in services {
+            let process_id = service["ProcessId"].as_u64().unwrap_or(0) as u32;
+            let name_str = service["Name"].as_str().unwrap_or("Unknown").to_string();
+            let status_str = service["Status"].as_str().unwrap_or("Unknown").to_string();
+            let c_name = CString::new(name_str).unwrap().into_raw();
+            let c_status = CString::new(status_str).unwrap().into_raw();
+            vec.push(ServiceInfo {
+                process_id,
+                name: c_name,
+                status: c_status,
+            });
+        }
+        let data_ptr = vec.as_mut_ptr();
+        std::mem::forget(vec);
+        ServiceInfoArray { data: data_ptr, len }
+    } else {
+        ServiceInfoArray { data: std::ptr::null_mut(), len: 0 }
+    }
+}
+
+#[cfg(target_os = "windows")]
+#[no_mangle]
+pub extern "C" fn free_services_info_array(array: ServiceInfoArray) {
+    if array.data.is_null() {
+        return;
+    }
+    unsafe {
+        let vec = Vec::from_raw_parts(array.data, array.len, array.len);
+        for service in vec {
+            if !service.name.is_null() {
+                let _ = CString::from_raw(service.name);
+            }
+            if !service.status.is_null() {
+                let _ = CString::from_raw(service.status);
+            }
+        }
+    }
+}
 /// Функция для освобождения памяти, выделенной функциями, возвращающими C‑строку.
 #[no_mangle]
 pub extern "C" fn free_string(s: *mut c_char) {
