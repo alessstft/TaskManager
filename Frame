@@ -90,11 +90,11 @@ canvas = Canvas(frame2, bg="#872187", highlightthickness=0)
 canvas.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
 
 metrics = [
-    {"label": "ЦП"},
-    {"label": "Память"},
-    {"label": "Диск"},
-    {"label": "Ethernet"},
-    {"label": "GPU"},
+    {"label": "ЦП", "value": "15%"},
+    {"label": "Память", "value": "1.2GB"},
+    {"label": "Диск", "value": "5MB/s"},
+    {"label": "Ethernet", "value": "100Kb/s"},
+    {"label": "GPU", "value": "30%"},
 ]
 
 canvas.bind("<Configure>", update_canvas)
