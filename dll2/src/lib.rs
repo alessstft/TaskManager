@@ -526,24 +526,24 @@ pub extern "C" fn free_process_info_array(array: ProcessInfoArray) {
 }
 //ДЛЯ WINDOWS
 //ВАНЯ, допиши выше зависимости и добавь их в cargo.toml. Функцию
-// #[unsafe(no_mangle)] 
-// pub extern "C" fn kill_process(pid: u32) -> i32 {
-//     unsafe {
-//         let process_handle: HANDLE = OpenProcess(PROCESS_TERMINATE, 0, pid);
-//         if process_handle.is_null() {
-//             return -1;  // Ошибка: не удалось открыть процесс
-//         }
+#[unsafe(no_mangle)] 
+pub extern "C" fn kill_process(pid: u32) -> i32 {
+    unsafe {
+        let process_handle: HANDLE = OpenProcess(PROCESS_TERMINATE, 0, pid);
+        if process_handle.is_null() {
+            return -1;  // Ошибка: не удалось открыть процесс
+        }
 
-//         // Завершаем процесс
-//         if TerminateProcess(process_handle, 1) == 0 {
-//             CloseHandle(process_handle); 
-//             return -2;  // Ошибка: не удалось завершить процесс
-//         }
+        // Завершаем процесс
+        if TerminateProcess(process_handle, 1) == 0 {
+            CloseHandle(process_handle); 
+            return -2;  // Ошибка: не удалось завершить процесс
+        }
 
-//         CloseHandle(process_handle);
-//         return 0;
-//     }
-// }
+        CloseHandle(process_handle);
+        return 0;
+    }
+}
 
 //ДЛЯ MAC OS
 /// Функция для завершения процесса по идентификатору.
