@@ -57,11 +57,6 @@ class TaskManager:
         self.notebook.add(self.performance_frame, text="Производительность")
         self._setup_performance_tab()
 
-        # Вкладка "Службы"
-        self.services_frame = tk.Frame(self.notebook, bg="#872187")
-        self.notebook.add(self.services_frame, text="Службы")
-        self._setup_services_tab()
-
     def _setup_processes_tab(self):
         # Таблица процессов
         columns = ("Имя", "ЦП", "Память", "Диск", "Сеть", "GPU", "Энерг-ие")
@@ -107,17 +102,6 @@ class TaskManager:
 
         self.canvas.bind("<Configure>", self._update_canvas)
 
-    def _setup_services_tab(self):
-        # Таблица для отображения сервисов
-        columns = ("Имя", "ИД процесса", "Описание", "Состояние", "Группа")
-        self.services_tree = ttk.Treeview(self.services_frame, columns=columns, show="headings")
-        
-        for col in columns:
-            self.services_tree.heading(col, text=col)
-            self.services_tree.column(col, width=150, anchor="center")
-            
-        self.services_tree.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-
     def _update_data_buffer(self, cpu_info, memory_info, process_info):
         """Обновляет буфер данных в отдельном потоке"""
         with self._data_lock:
@@ -136,8 +120,6 @@ class TaskManager:
             if all(x is not None for x in (self._cpu_info, self._memory_info, self._process_info)):
                 self._update_processes(self._process_info)
                 self._update_performance_metrics()
-        # Также обновляем отображение сервисов
-        self._update_services()
 
     def _update_processes(self, processes):
         """Обновляет таблицу процессов"""
@@ -220,25 +202,6 @@ class TaskManager:
         ]
         self._update_canvas()
 
-    def _update_services(self):
-        """Обновляет таблицу сервисов"""
-        services = self.system_monitor.get_services_info()
-        # Сохраняем выбранные элементы
-        selected_items = self.services_tree.selection()
-        selected_names = [self.services_tree.item(item)['values'][0] for item in selected_items]
-        self.services_tree.delete(*self.services_tree.get_children())
-        for svc in services:
-            values = (
-                svc['name'],
-                svc['process_id'],
-                svc['description'],
-                svc['status'],
-                svc['group']
-            )
-            item = self.services_tree.insert("", tk.END, values=values)
-            if svc['name'] in selected_names:
-                self.services_tree.selection_add(item)
-
     def _update_canvas(self, event=None):
         """Обновляет отрисовку кругов на канвасе"""
         self.canvas.delete("all")
@@ -250,43 +213,40 @@ class TaskManager:
             (width * 0.2, height * 0.3),
             (width * 0.5, height * 0.3),
             (width * 0.8, height * 0.3),
-            (width * 0.3, height * 0.7),
-            (width * 0.7, height * 0.7),
+            (width * 0.35, height * 0.7),
+            (width * 0.65, height * 0.7)
         ]
 
-        for i, metric in enumerate(self.metrics):
-            x, y = positions[i]
-            circle = self.canvas.create_oval(
-                x - circle_size, y - circle_size,
-                x + circle_size, y + circle_size,
-                fill="#3d1a3d", outline="black",
-                tags=f"circle_{i}"
-            )
-            self.canvas.create_text(
-                x, y, text=metric['label'],
-                font=("Arial", 12, "bold"),
-                fill="white"
-            )
-            self.canvas.tag_bind(
-                f"circle_{i}",
-                "<Button-1>",
-                lambda e, m=metric: self._on_circle_click(m)
-            )
-
-    def _on_circle_click(self, metric):
-        """Обработчик клика по кругу"""
-        messagebox.showinfo("Информация", metric['label'])
+        for i, (x, y) in enumerate(positions):
+            if i < len(self.metrics):
+                # Рисуем круг
+                self.canvas.create_oval(
+                    x - circle_size, y - circle_size,
+                    x + circle_size, y + circle_size,
+                    fill="#5c2d5c", outline="white"
+                )
+                # Добавляем текст
+                self.canvas.create_text(
+                    x, y,
+                    text=self.metrics[i]["label"],
+                    fill="white",
+                    font=("Arial", 12, "bold")
+                )
 
     def _end_task(self):
         """Завершает выбранный процесс"""
-        selected_item = self.process_tree.selection()
-        if selected_item:
-            self.process_tree.delete(selected_item)
-        else:
-            messagebox.showwarning("Ошибка", "Выберите задачу для завершения")
+        selected = self.process_tree.selection()
+        if not selected:
+            messagebox.showwarning("Предупреждение", "Выберите процесс для завершения")
+            return
+            
+        process_name = self.process_tree.item(selected[0])['values'][0]
+        if messagebox.askyesno("Подтверждение", f"Вы уверены, что хотите завершить процесс {process_name}?"):
+            # Здесь должен быть код для завершения процесса
+            pass
 
     def __del__(self):
-        """Очистка ресурсов при закрытии"""
+        """Деструктор класса"""
         if hasattr(self, 'system_monitor'):
             self.system_monitor.stop_monitoring()
 

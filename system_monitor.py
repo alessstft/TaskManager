@@ -67,23 +67,13 @@ class NetworksStaticInfoArray(Structure):
         ("len", c_size_t),
     ]
 
-# Новые структуры для информации о сервисах (для Windows)
-class ServiceInfo(Structure):
-    _fields_ = [
-        ("process_id", ctypes.c_uint),
-        ("name", c_char_p),
-        ("status", c_char_p),
-    ]
-
-class ServiceInfoArray(Structure):
-    _fields_ = [
-        ("data", POINTER(ServiceInfo)),
-        ("len", c_size_t),
-    ]
-
 class SystemMonitor:
-    def __init__(self, dll_path: str = "sys_info_fn/target/release/sys_info_fn.dll"):
-        self.dll = ctypes.CDLL(dll_path)
+    def __init__(self, dll_path: str = "sys_info_fn.dll"):
+        try:
+            self.dll = ctypes.CDLL(dll_path)
+        except Exception as e:
+            print(f"Error loading DLL: {e}")
+            raise
         self._setup_dll_functions()
         self._running = False
         self._update_thread = None
@@ -102,10 +92,6 @@ class SystemMonitor:
         # Функции для управления процессами
         self.dll.start_process_collector.restype = c_int
         self.dll.stop_process_collector.restype = c_int
-
-        # Настройка функций для работы с сервисами (Windows)
-        self.dll.get_services_info_array.restype = ServiceInfoArray
-        self.dll.free_services_info_array.argtypes = [ServiceInfoArray]
         
     def start_monitoring(self, update_interval: float = 1.0):
         """Запускает мониторинг системы"""
@@ -251,38 +237,19 @@ class SystemMonitor:
             else:
                 send_speed = 0
                 recv_speed = 0
-            
-            self._last_network_stats[name] = current_stats
-            
+                
             networks.append({
                 'name': name,
-                'ipv4': network.ipv4.decode('utf-8'),
-                'send': network.send,
-                'recive': network.recive,
+                'ipv4': network.ipv4.decode('utf-8') if network.ipv4 else "",
                 'send_speed': send_speed,
                 'recv_speed': recv_speed
             })
-        
-        self.dll.free_networks_static_info_array(network_array)
+            
+            self._last_network_stats[name] = current_stats
+            
         self._last_update_time = current_time
+        self.dll.free_networks_static_info_array(network_array)
         return networks
-
-    # Новый метод для получения информации о сервисах (Windows)
-    def get_services_info(self) -> List[Dict]:
-        """Получает информацию о сервисах (только для Windows)"""
-        service_array = self.dll.get_services_info_array()
-        services = []
-        for i in range(service_array.len):
-            service = service_array.data[i]
-            services.append({
-                "process_id": service.process_id,
-                "name": service.name.decode('utf-8') if service.name else "Unknown",
-                "status": service.status.decode('utf-8') if service.status else "Unknown",
-                "description": "",  # Дополнительной информации нет
-                "group": "",        # Дополнительной информации нет
-            })
-        self.dll.free_services_info_array(service_array)
-        return services
 
     def get_disk_info(self) -> List[Dict]:
         """Публичный метод для получения информации о дисках"""
@@ -293,14 +260,14 @@ class SystemMonitor:
         return self._get_network_info()
 
     def get_cpu_percent(self) -> float:
-        """Публичный метод для получения загрузки CPU"""
+        """Получает процент использования CPU"""
         return self._get_cpu_info()['usage']
 
     def get_memory_percent(self) -> float:
-        """Публичный метод для получения использования памяти"""
+        """Получает процент использования памяти"""
         memory_info = self._get_memory_info()
-        return (memory_info['used'] / memory_info['total']) * 100 if memory_info['total'] > 0 else 0
+        return (memory_info['used'] / memory_info['total']) * 100
 
     def __del__(self):
-        """Деструктор для очистки ресурсов"""
+        """Деструктор класса"""
         self.stop_monitoring()
