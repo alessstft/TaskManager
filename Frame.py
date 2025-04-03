@@ -57,6 +57,11 @@ class TaskManager:
         self.notebook.add(self.performance_frame, text="Производительность")
         self._setup_performance_tab()
 
+        # Вкладка "Службы"
+        self.services_frame = tk.Frame(self.notebook, bg="#872187")
+        self.notebook.add(self.services_frame, text="Службы")
+        self._setup_services_tab()
+
     def _setup_processes_tab(self):
         # Таблица процессов
         columns = ("Имя", "ЦП", "Память", "Диск", "Сеть", "GPU", "Энерг-ие")
@@ -74,6 +79,22 @@ class TaskManager:
                                     font=("Arial", 12, "bold"), 
                                     command=self._end_task)
         self.end_task_btn.pack(pady=10)
+
+    def _setup_services_tab(self):
+        # Таблица служб
+        columns = ("Имя", "ID процесса", "Состояние")
+        self.services_tree = ttk.Treeview(self.services_frame, columns=columns, show="headings")
+
+        # Настройка колонок
+        self.services_tree.heading("Имя", text="Имя")
+        self.services_tree.heading("ID процесса", text="ID процесса")
+        self.services_tree.heading("Состояние", text="Состояние")
+
+        self.services_tree.column("Имя", width=300)
+        self.services_tree.column("ID процесса", width=100)
+        self.services_tree.column("Состояние", width=150)
+
+        self.services_tree.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 
     def _setup_performance_tab(self):
         # Создаем Canvas для графиков
@@ -120,6 +141,23 @@ class TaskManager:
             if all(x is not None for x in (self._cpu_info, self._memory_info, self._process_info)):
                 self._update_processes(self._process_info)
                 self._update_performance_metrics()
+                self._update_services()
+
+    def _update_services(self):
+        """Обновляет таблицу служб"""
+        # Очистка старых данных
+        self.services_tree.delete(*self.services_tree.get_children())
+        
+        # Получение информации о службах
+        services = self.system_monitor.get_services_info()
+        
+        # Добавление новых данных
+        for service in services:
+            self.services_tree.insert("", tk.END, values=(
+                service['name'],
+                service['process_id'],
+                service['status']
+            ))
 
     def _update_processes(self, processes):
         """Обновляет таблицу процессов"""
@@ -198,7 +236,7 @@ class TaskManager:
             {"label": f"Память\n{memory_used:.1f}/{memory_total:.1f} GB"},
             {"label": f"Диск\n{disk_text} GB"},
             {"label": f"Ethernet\n{network_text}"},
-            {"label": "GPU\n0%"}
+            {"label": f"GPU\n0%"}
         ]
         self._update_canvas()
 
@@ -252,7 +290,7 @@ class TaskManager:
 
 if __name__ == "__main__":
     root = tk.Tk()
-    icon = PhotoImage(file="icon.png")
+    icon = PhotoImage(file="C:/taskmng/TaskManager/icon.png")
     root.iconphoto(False, icon)
     app = TaskManager(root)
     root.mainloop()

@@ -1,5 +1,5 @@
 import ctypes
-from ctypes import c_char_p, c_float, c_double, c_uint64, c_int, c_void_p, Structure, POINTER, c_size_t
+from ctypes import c_char_p, c_float, c_double, c_uint64, c_int, c_void_p, Structure, POINTER, c_size_t, c_uint32
 import os
 from typing import List, Dict, Optional
 import threading
@@ -18,6 +18,19 @@ class ProcessInfo(Structure):
 class ProcessInfoArray(Structure):
     _fields_ = [
         ("data", POINTER(ProcessInfo)),
+        ("len", c_size_t),
+    ]
+
+class ServiceInfo(Structure):
+    _fields_ = [
+        ("process_id", c_uint32),
+        ("name", c_char_p),
+        ("status", c_char_p),
+    ]
+
+class ServiceInfoArray(Structure):
+    _fields_ = [
+        ("data", POINTER(ServiceInfo)),
         ("len", c_size_t),
     ]
 
@@ -68,7 +81,7 @@ class NetworksStaticInfoArray(Structure):
     ]
 
 class SystemMonitor:
-    def __init__(self, dll_path: str = "sys_info_fn.dll"):
+    def __init__(self, dll_path: str = "C:/taskmng/TaskManager/dll2/target/release/sys_info_fn.dll"):
         try:
             self.dll = ctypes.CDLL(dll_path)
         except Exception as e:
@@ -88,6 +101,7 @@ class SystemMonitor:
         self.dll.get_process_info_array.restype = ProcessInfoArray
         self.dll.get_disk_static_info_array.restype = DiskStaticInfoArray
         self.dll.get_networks_static_info_array.restype = NetworksStaticInfoArray
+        self.dll.get_services_info_array.restype = ServiceInfoArray
         
         # Функции для управления процессами
         self.dll.start_process_collector.restype = c_int
@@ -268,6 +282,23 @@ class SystemMonitor:
         memory_info = self._get_memory_info()
         return (memory_info['used'] / memory_info['total']) * 100
 
+    def get_services_info(self) -> List[Dict]:
+        """Получает информацию о службах Windows"""
+        services_array = self.dll.get_services_info_array()
+        services = []
+        
+        for i in range(services_array.len):
+            service = services_array.data[i]
+            services.append({
+                'process_id': service.process_id,
+                'name': service.name.decode('utf-8') if service.name else "Unknown",
+                'status': service.status.decode('utf-8') if service.status else "Unknown"
+            })
+            
+        self.dll.free_services_info_array(services_array)
+        return services
+
     def __del__(self):
         """Деструктор класса"""
-        self.stop_monitoring()
+        if hasattr(self, '_update_thread'):
+            self.stop_monitoring()
