@@ -545,6 +545,37 @@ pub extern "C" fn kill_process(pid: u32) -> i32 {
     }
 }
 
+#[no_mangle]
+pub extern "C" fn get_proc_path(pid: u32) -> *const c_char {
+    let mut filename: [u16; 260] = [0; 260];
+
+    let process_handle: HANDLE = unsafe {
+        OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, 0, pid)
+    };
+
+    if process_handle.is_null() {
+        return ptr::null();
+    }
+
+    let result = unsafe {
+        GetModuleFileNameExW(process_handle, ptr::null_mut(), filename.as_mut_ptr(), filename.len() as u32)
+    };
+
+    unsafe { CloseHandle(process_handle) };
+
+    if result == 0 {
+        return ptr::null();
+    }
+
+    // Convert to UTF-16 string and then to CString
+    let filename_osstr = OsString::from_wide(&filename[..result as usize]);
+    let path = filename_osstr.to_string_lossy().into_owned();
+    
+    match CString::new(path) {
+        Ok(c_string) => c_string.into_raw(), // Transfer ownership to caller
+        Err(_) => ptr::null(),
+    }
+
 //ДЛЯ MAC OS
 /// Функция для завершения процесса по идентификатору.
 // #[no_mangle]
