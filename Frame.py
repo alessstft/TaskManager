@@ -64,14 +64,16 @@ class TaskManager:
 
     def _setup_processes_tab(self):
         # Таблица процессов
-        columns = ("Имя", "ЦП", "Память", "Диск", "Сеть", "GPU", "Энерг-ие")
+        columns = ("ID процесса", "Имя", "ЦП", "Память", "Диск", "Сеть", "GPU", "Энерг-ие")
         self.process_tree = ttk.Treeview(self.processes_frame, columns=columns, show="headings")
 
         for col in columns:
             self.process_tree.heading(col, text=col)
+            self.services_tree.heading("ID процесса", text="ID процесса")
             self.process_tree.column(col, width=80, anchor="center")
 
         self.process_tree.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        self.services_tree.column("ID процесса", width=100)
 
         # Кнопка завершения задачи
         self.end_task_btn = tk.Button(self.processes_frame, text="Завершить задачу", 
