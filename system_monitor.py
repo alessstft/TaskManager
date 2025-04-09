@@ -1,10 +1,11 @@
 import ctypes
 from ctypes import c_char_p, c_float, c_double, c_uint64, c_int, c_void_p, Structure, POINTER, c_size_t, c_uint32
 import os
-from typing import List, Dict, Optional
+from typing import List, Dict
 import threading
 import time
 
+# Определения структур для FFI (как и ранее)
 class ProcessInfo(Structure):
     _fields_ = [
         ("pid", c_char_p),
@@ -81,7 +82,7 @@ class NetworksStaticInfoArray(Structure):
     ]
 
 class SystemMonitor:
-    def __init__(self, dll_path: str = "./dll2/target/release/sys_info_fn.dll"):
+    def __init__(self, dll_path: str = "C:/Users/studentcoll/Desktop/Панов Иля/Менеджер задач/sis_info_dll/target/release/sys_info_fn.dll"):
         try:
             self.dll = ctypes.CDLL(dll_path)
         except Exception as e:
@@ -90,70 +91,70 @@ class SystemMonitor:
         self._setup_dll_functions()
         self._running = False
         self._update_thread = None
+        self._stop_event = threading.Event()
         self._callbacks = []
-        self._last_network_stats = {}  # Для расчета скорости сети
+        self._last_network_stats = {}
         self._last_update_time = time.time()
         
     def _setup_dll_functions(self):
-        # Настройка типов возвращаемых значений для функций DLL
         self.dll.get_cpu_static_info.restype = POINTER(CpuStaticInfo)
         self.dll.get_memory_static_info.restype = MemoryStaticInfo
         self.dll.get_process_info_array.restype = ProcessInfoArray
         self.dll.get_disk_static_info_array.restype = DiskStaticInfoArray
         self.dll.get_networks_static_info_array.restype = NetworksStaticInfoArray
         self.dll.get_services_info_array.restype = ServiceInfoArray
-        
-        # Функции для управления процессами
+
         self.dll.start_process_collector.restype = c_int
         self.dll.stop_process_collector.restype = c_int
+        self.dll.kill_process.argtypes = [c_uint32]
+        self.dll.kill_process.restype = c_int
+
         
-    def start_monitoring(self, update_interval: float = 1.0):
-        """Запускает мониторинг системы"""
+    def start_monitoring(self, update_interval: float = 2.0):
+        """Запускает мониторинг системы с минимальной нагрузкой."""
         if self._running:
             return
-            
         self._running = True
+        self._stop_event.clear()
         self.dll.start_process_collector()
         
         def update_loop():
-            while self._running:
+            while not self._stop_event.is_set():
+                start_time = time.time()
                 self._update_data()
-                time.sleep(update_interval)
+                elapsed = time.time() - start_time
+                wait_time = max(0, update_interval - elapsed)
+                self._stop_event.wait(wait_time)
                 
         self._update_thread = threading.Thread(target=update_loop, daemon=True)
         self._update_thread.start()
         
     def stop_monitoring(self):
-        """Останавливает мониторинг системы"""
+        """Останавливает мониторинг системы."""
         self._running = False
+        self._stop_event.set()
         if self._update_thread:
             self._update_thread.join()
         self.dll.stop_process_collector()
         
     def _update_data(self):
-        """Обновляет данные о системе"""
         try:
             cpu_info = self._get_cpu_info()
             memory_info = self._get_memory_info()
             process_info = self._get_process_info()
-            
-            # Вызов всех зарегистрированных callback-функций с новыми данными
             for callback in self._callbacks:
                 callback(cpu_info, memory_info, process_info)
         except Exception as e:
             print(f"Error updating system data: {e}")
             
     def register_callback(self, callback):
-        """Регистрирует функцию обратного вызова для получения обновлений"""
         self._callbacks.append(callback)
         
     def unregister_callback(self, callback):
-        """Удаляет функцию обратного вызова"""
         if callback in self._callbacks:
             self._callbacks.remove(callback)
             
     def _get_cpu_info(self) -> Dict:
-        """Получает информацию о CPU"""
         cpu_info_ptr = self.dll.get_cpu_static_info()
         cpu_info = cpu_info_ptr.contents
         info = {
@@ -168,7 +169,6 @@ class SystemMonitor:
         return info
         
     def _get_memory_info(self) -> Dict:
-        """Получает информацию о памяти"""
         memory_info = self.dll.get_memory_static_info()
         info = {
             'total': memory_info.total,
@@ -180,10 +180,8 @@ class SystemMonitor:
         return info
         
     def _get_process_info(self) -> List[Dict]:
-        """Получает информацию о процессах"""
         process_array = self.dll.get_process_info_array()
         processes = []
-        
         for i in range(process_array.len):
             process = process_array.data[i]
             processes.append({
@@ -194,15 +192,12 @@ class SystemMonitor:
                 'read_kb': process.read_kb,
                 'written_kb': process.written_kb
             })
-            
         self.dll.free_process_info_array(process_array)
         return processes
         
     def _get_disk_info(self) -> List[Dict]:
-        """Получает информацию о дисках"""
         disk_array = self.dll.get_disk_static_info_array()
         disks = []
-        
         for i in range(disk_array.len):
             disk = disk_array.data[i]
             disks.append({
@@ -210,19 +205,15 @@ class SystemMonitor:
                 'total_space': disk.total_space,
                 'available_space': disk.available_space
             })
-            
         self.dll.free_disk_static_info_array(disk_array)
         return disks
         
     def _get_network_info(self) -> List[Dict]:
-        """Получает информацию о сетевых интерфейсах"""
         network_array = self.dll.get_networks_static_info_array()
         networks = []
         current_time = time.time()
         time_diff = current_time - self._last_update_time
-        
-        # Если прошло слишком много времени, сбрасываем статистику
-        if time_diff > 2.0:  # Если прошло больше 2 секунд
+        if time_diff > 2.0:
             self._last_network_stats = {}
             time_diff = 1.0
         
@@ -234,17 +225,11 @@ class SystemMonitor:
                 'recive': network.recive,
                 'time': current_time
             }
-            
-            # Расчет скорости передачи данных
             if name in self._last_network_stats:
                 last_stats = self._last_network_stats[name]
-                
-                # Байты в секунду
                 send_speed = (current_stats['send'] - last_stats['send']) / time_diff
                 recv_speed = (current_stats['recive'] - last_stats['recive']) / time_diff
-                
-                # Проверяем на адекватность значений
-                if send_speed < 0 or send_speed > 1e9:  # Больше 1 GB/s
+                if send_speed < 0 or send_speed > 1e9:
                     send_speed = 0
                 if recv_speed < 0 or recv_speed > 1e9:
                     recv_speed = 0
@@ -258,7 +243,6 @@ class SystemMonitor:
                 'send_speed': send_speed,
                 'recv_speed': recv_speed
             })
-            
             self._last_network_stats[name] = current_stats
             
         self._last_update_time = current_time
@@ -266,27 +250,21 @@ class SystemMonitor:
         return networks
 
     def get_disk_info(self) -> List[Dict]:
-        """Публичный метод для получения информации о дисках"""
         return self._get_disk_info()
 
     def get_network_info(self) -> List[Dict]:
-        """Публичный метод для получения информации о сети"""
         return self._get_network_info()
 
     def get_cpu_percent(self) -> float:
-        """Получает процент использования CPU"""
         return self._get_cpu_info()['usage']
 
     def get_memory_percent(self) -> float:
-        """Получает процент использования памяти"""
         memory_info = self._get_memory_info()
         return (memory_info['used'] / memory_info['total']) * 100
 
     def get_services_info(self) -> List[Dict]:
-        """Получает информацию о службах Windows"""
         services_array = self.dll.get_services_info_array()
         services = []
-        
         for i in range(services_array.len):
             service = services_array.data[i]
             services.append({
@@ -294,11 +272,14 @@ class SystemMonitor:
                 'name': service.name.decode('utf-8') if service.name else "Unknown",
                 'status': service.status.decode('utf-8') if service.status else "Unknown"
             })
-            
         self.dll.free_services_info_array(services_array)
         return services
 
+    def kill_process(self, pid: int) -> bool:
+        result = self.dll.kill_process(pid)
+        return result == 0
+
+
     def __del__(self):
-        """Деструктор класса"""
         if hasattr(self, '_update_thread'):
             self.stop_monitoring()
