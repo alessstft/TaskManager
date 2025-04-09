@@ -64,16 +64,13 @@ class TaskManager:
 
     def _setup_processes_tab(self):
         # Таблица процессов
-        columns = ("ID процесса", "Имя", "ЦП", "Память", "Диск", "Сеть", "GPU", "Энерг-ие")
+        columns = ( "ID процесса", "Имя", "ЦП", "Память", "Диск", "Сеть", "GPU", "Энерг-ие")
         self.process_tree = ttk.Treeview(self.processes_frame, columns=columns, show="headings")
 
         for col in columns:
             self.process_tree.heading(col, text=col)
-            self.services_tree.heading("ID процесса", text="ID процесса")
             self.process_tree.column(col, width=80, anchor="center")
-
         self.process_tree.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-        self.services_tree.column("ID процесса", width=100)
 
         # Кнопка завершения задачи
         self.end_task_btn = tk.Button(self.processes_frame, text="Завершить задачу", 
@@ -84,16 +81,16 @@ class TaskManager:
 
     def _setup_services_tab(self):
         # Таблица служб
-        columns = ("Имя", "ID процесса", "Состояние")
+        columns = ("Имя", "ID служб", "Состояние")
         self.services_tree = ttk.Treeview(self.services_frame, columns=columns, show="headings")
 
         # Настройка колонок
         self.services_tree.heading("Имя", text="Имя")
-        self.services_tree.heading("ID процесса", text="ID процесса")
+        self.services_tree.heading("ID служб", text="ID служб")
         self.services_tree.heading("Состояние", text="Состояние")
 
         self.services_tree.column("Имя", width=300)
-        self.services_tree.column("ID процесса", width=100)
+        self.services_tree.column("ID служб", width=100)
         self.services_tree.column("Состояние", width=150)
 
         self.services_tree.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
@@ -292,7 +289,7 @@ class TaskManager:
 
 if __name__ == "__main__":
     root = tk.Tk()
-    icon = PhotoImage(file="C:/taskmng/TaskManager/icon.png")
-    root.iconphoto(False, icon)
+    # icon = PhotoImage(file="C:/taskmng/TaskManager/icon.png")
+    # root.iconphoto(False, icon)
     app = TaskManager(root)
     root.mainloop()
