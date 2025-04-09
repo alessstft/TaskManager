@@ -9,6 +9,7 @@ use local_ipaddress;
 use std::process::Command;
 use serde::Deserialize;
 use sysinfo::NetworkExt;
+
 // Глобальный кэш объекта System
 lazy_static! {
     static ref SYS: Mutex<System> = Mutex::new(System::new());
@@ -343,10 +344,6 @@ pub extern "C" fn free_networks_static_info_array(array: NetworksStaticInfoArray
 
 // ===================== ПРОЦЕССНЫЙ МОДУЛЬ =====================
 
-// Остальной код (сбор информации о процессах, запуск фонового потока и т.д.)
-// оставляем без изменений, так как здесь оптимизация глобального System не столь критична,
-// а фоновый поток использует собственный экземпляр System для периодического сбора информации.
-
 #[repr(C)]
 pub struct ProcessInfo {
     pub pid: *mut c_char,      // идентификатор процесса (строка)
@@ -385,14 +382,18 @@ lazy_static! {
 
 fn create_process_info_internal(pid: &sysinfo::Pid, process: &sysinfo::Process) -> ProcessInfoInternal {
     let disk_usage = process.disk_usage();
+    let total_cores = SYS.lock().unwrap().cpus().len() as f32;
+
+    // Внутри цикла для каждого процесса:
     ProcessInfoInternal {
         pid: pid.to_string(),
         name: process.name().to_string(),
-        cpu_usage: process.cpu_usage(),
+        cpu_usage: process.cpu_usage() / total_cores,  // нормализованное значение
         memory_mb: process.memory() as f64 / (1024.0 * 1024.0),
         read_kb: disk_usage.total_read_bytes as f64 / 1024.0,
         written_kb: disk_usage.total_written_bytes as f64 / 1024.0,
     }
+
 }
 
 fn process_collector_thread(running: Arc<AtomicBool>, info: Arc<Mutex<Vec<ProcessInfoInternal>>>) {
@@ -499,18 +500,38 @@ pub extern "C" fn free_process_info_array(array: ProcessInfoArray) {
 #[cfg(target_os = "windows")]
 #[no_mangle]
 pub extern "C" fn get_services_info_array() -> ServiceInfoArray {
-    let output = Command::new("powershell")
+    let output = Command::new("C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe")
         .args(&[
+            "-ExecutionPolicy", "Bypass",
             "-Command",
             "Get-CimInstance Win32_Service | Select-Object ProcessId, Name, Status | ConvertTo-Json -Compress"
         ])
-        .output()
-        .expect("Не удалось выполнить команду PowerShell");
+        .output();
+
+    let output = match output {
+        Ok(out) => out,
+        Err(e) => {
+            eprintln!("PowerShell execution error: {:?}", e);
+            return ServiceInfoArray { data: std::ptr::null_mut(), len: 0 };
+        }
+    };
 
     if output.status.success() {
         let output_str = String::from_utf8_lossy(&output.stdout);
-        let services: Vec<serde_json::Value> = serde_json::from_str(&output_str)
-            .expect("Не удалось распарсить JSON");
+        let json_str = if output_str.trim_start().starts_with('[') {
+            output_str.to_string()
+        } else {
+            format!("[{}]", output_str)
+        };
+        
+        let services: Vec<serde_json::Value> = match serde_json::from_str(&json_str) {
+            Ok(data) => data,
+            Err(e) => {
+                eprintln!("JSON parsing error: {:?}", e);
+                return ServiceInfoArray { data: std::ptr::null_mut(), len: 0 };
+            }
+        };
+        
         let len = services.len();
         let mut vec: Vec<ServiceInfo> = Vec::with_capacity(len);
         for service in services {
@@ -529,6 +550,8 @@ pub extern "C" fn get_services_info_array() -> ServiceInfoArray {
         std::mem::forget(vec);
         ServiceInfoArray { data: data_ptr, len }
     } else {
+        let error_msg = String::from_utf8_lossy(&output.stderr);
+        eprintln!("PowerShell error: {}", error_msg);
         ServiceInfoArray { data: std::ptr::null_mut(), len: 0 }
     }
 }
@@ -549,6 +572,68 @@ pub extern "C" fn free_services_info_array(array: ServiceInfoArray) {
                 let _ = CString::from_raw(service.status);
             }
         }
+    }
+}
+
+// ===================== ФУНКЦИЯ ДЛЯ ПОЛУЧЕНИЯ ПУТИ К ПРОЦЕССУ НА WINDOWS =====================
+#[cfg(target_os = "windows")]
+#[no_mangle]
+pub extern "C" fn get_proc_path(pid: u32) -> *const c_char {
+    use std::ptr;
+    use winapi::um::processthreadsapi::OpenProcess;
+    use winapi::um::winnt::{PROCESS_QUERY_INFORMATION, PROCESS_VM_READ};
+    use winapi::um::handleapi::CloseHandle;
+    use winapi::um::psapi::GetModuleFileNameExW;
+    use std::os::windows::ffi::OsStringExt;
+    use std::ffi::OsString;
+    
+    let mut filename: [u16; 260] = [0; 260];
+
+    let process_handle = unsafe {
+        OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, 0, pid)
+    };
+
+    if process_handle.is_null() {
+        return ptr::null();
+    }
+
+    let result = unsafe {
+        GetModuleFileNameExW(process_handle, ptr::null_mut(), filename.as_mut_ptr(), filename.len() as u32)
+    };
+
+    unsafe { CloseHandle(process_handle) };
+
+    if result == 0 {
+        return ptr::null();
+    }
+
+    // Преобразуем полученный wide-строковый буфер в CString
+    let os_string = OsString::from_wide(&filename[..result as usize]);
+    let string = os_string.to_string_lossy().into_owned();
+    CString::new(string).unwrap().into_raw()
+}
+
+// Добавьте этот код (например, в конце файла)
+#[cfg(target_os = "windows")]
+#[no_mangle]
+pub extern "C" fn kill_process(pid: u32) -> i32 {
+    use winapi::um::processthreadsapi::{OpenProcess, TerminateProcess};
+    use winapi::um::winnt::PROCESS_TERMINATE;
+    use winapi::um::handleapi::CloseHandle;
+
+    unsafe {
+        // Открываем процесс с правом завершения
+        let handle = OpenProcess(PROCESS_TERMINATE, 0, pid);
+        if handle.is_null() {
+            return -1; // Не удалось открыть процесс
+        }
+        // Завершаем процесс, передаём код завершения (например, 1)
+        let result = TerminateProcess(handle, 1);
+        CloseHandle(handle);
+        if result == 0 {
+            return -2; // Завершение не удалось
+        }
+        0 // Успех
     }
 }
 
