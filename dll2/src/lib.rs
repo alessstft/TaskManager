@@ -575,6 +575,7 @@ pub extern "C" fn get_proc_path(pid: u32) -> *const c_char {
         Ok(c_string) => c_string.into_raw(), // Transfer ownership to caller
         Err(_) => ptr::null(),
     }
+}
 
 //ДЛЯ MAC OS
 /// Функция для завершения процесса по идентификатору.
