@@ -1,2 +1,25 @@
 .cursorrules
-.cursor/ 
+.cursor/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.env
+.venv
+env/
+venv/
+ENV/
+
+# Rust/DLL
+*.dll
+*.pdb
+dll2/target/
+dll2/debug/
+
+# IDE
+.vs/
+.vscode/
+*.swp
+*~ 
