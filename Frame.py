@@ -19,6 +19,7 @@ class TaskManager:
         self._memory_info = None
         self._process_info = None
         self._data_lock = threading.Lock()
+        self._process_selected = False
         
         # Настройка стилей
         self._setup_styles()
@@ -71,6 +72,10 @@ class TaskManager:
             self.process_tree.heading(col, text=col)
             self.process_tree.column(col, width=80, anchor="center")
         self.process_tree.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        
+        # Привязываем обработчики событий
+        self.process_tree.bind('<<TreeviewSelect>>', self._on_process_select)
+        self.process_tree.bind('<Button-3>', self._on_right_click)  # Правый клик
 
         # Кнопка завершения задачи
         self.end_task_btn = tk.Button(
@@ -156,6 +161,9 @@ class TaskManager:
 
     def _update_processes(self, processes):
         """Обновляет таблицу процессов"""
+        if self._process_selected:
+            return
+            
         selected_items = self.process_tree.selection()
         selected_values = [self.process_tree.item(item)['values'][0] for item in selected_items]
         self.process_tree.delete(*self.process_tree.get_children())
@@ -263,8 +271,21 @@ class TaskManager:
         if messagebox.askyesno("Подтверждение", f"Вы уверены, что хотите завершить процесс {process_name} (PID: {pid})?"):
             if self.system_monitor.kill_process(pid):
                 messagebox.showinfo("Успех", f"Процесс {process_name} (PID: {pid}) успешно завершён.")
+                self._process_selected = False
             else:
                 messagebox.showerror("Ошибка", f"Не удалось завершить процесс {process_name} (PID: {pid}).")
+
+    def _on_process_select(self, event):
+        """Обработчик выбора процесса"""
+        if self.process_tree.selection():
+            self._process_selected = True
+        else:
+            self._process_selected = False
+
+    def _on_right_click(self, event):
+        """Обработчик правого клика - снимает выделение"""
+        self.process_tree.selection_remove(self.process_tree.selection())
+        self._process_selected = False
 
     def __del__(self):
         if hasattr(self, 'system_monitor'):

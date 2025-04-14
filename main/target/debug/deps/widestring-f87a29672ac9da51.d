@@ -1,0 +1,11 @@
+C:\taskmng\TaskManager\main\target\debug\deps\libwidestring-f87a29672ac9da51.rmeta: C:\Users\Катя\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\widestring-0.4.3\src\lib.rs C:\Users\Катя\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\widestring-0.4.3\src\platform\mod.rs C:\Users\Катя\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\widestring-0.4.3\src\platform\windows.rs C:\Users\Катя\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\widestring-0.4.3\src\ucstr.rs C:\Users\Катя\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\widestring-0.4.3\src\ucstring.rs C:\Users\Катя\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\widestring-0.4.3\src\ustr.rs C:\Users\Катя\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\widestring-0.4.3\src\ustring.rs
+
+C:\taskmng\TaskManager\main\target\debug\deps\widestring-f87a29672ac9da51.d: C:\Users\Катя\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\widestring-0.4.3\src\lib.rs C:\Users\Катя\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\widestring-0.4.3\src\platform\mod.rs C:\Users\Катя\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\widestring-0.4.3\src\platform\windows.rs C:\Users\Катя\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\widestring-0.4.3\src\ucstr.rs C:\Users\Катя\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\widestring-0.4.3\src\ucstring.rs C:\Users\Катя\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\widestring-0.4.3\src\ustr.rs C:\Users\Катя\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\widestring-0.4.3\src\ustring.rs
+
+C:\Users\Катя\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\widestring-0.4.3\src\lib.rs:
+C:\Users\Катя\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\widestring-0.4.3\src\platform\mod.rs:
+C:\Users\Катя\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\widestring-0.4.3\src\platform\windows.rs:
+C:\Users\Катя\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\widestring-0.4.3\src\ucstr.rs:
+C:\Users\Катя\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\widestring-0.4.3\src\ucstring.rs:
+C:\Users\Катя\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\widestring-0.4.3\src\ustr.rs:
+C:\Users\Катя\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\widestring-0.4.3\src\ustring.rs:

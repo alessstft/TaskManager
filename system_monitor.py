@@ -82,7 +82,7 @@ class NetworksStaticInfoArray(Structure):
     ]
 
 class SystemMonitor:
-    def __init__(self, dll_path: str = "C:/Users/studentcoll/Desktop/Панов Иля/Менеджер задач/sis_info_dll/target/release/sys_info_fn.dll"):
+    def __init__(self, dll_path: str = "dll2/target/release/sys_info_fn.dll"):
         try:
             self.dll = ctypes.CDLL(dll_path)
         except Exception as e:
