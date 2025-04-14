@@ -1,19 +1,21 @@
-use sysinfo::{System, SystemExt, CpuExt, ProcessExt, DiskExt, NetworksExt,NetworkExt};
+use sysinfo::{System, SystemExt, CpuExt, ProcessExt, DiskExt, NetworksExt};
 use std::ffi::CString;
 use std::os::raw::c_char;
-use std::sync::{
-    Arc,
-    Mutex,
-    atomic::{AtomicBool, Ordering},
-};
+use std::sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 use lazy_static::lazy_static;
 use local_ipaddress;
 use std::process::Command;
 use serde::Deserialize;
-// ===================== СТРУКТУРЫ ДЛЯ СТАТИЧЕСКОЙ ИНФОРМАЦИИ =====================
+use sysinfo::NetworkExt;
 
+// Глобальный кэш объекта System
+lazy_static! {
+    static ref SYS: Mutex<System> = Mutex::new(System::new());
+}
+
+// ===================== СТРУКТУРЫ ДЛЯ СТАТИЧЕСКОЙ ИНФОРМАЦИИ =====================
 #[repr(C)]
 pub struct CpuStaticInfo {
     pub brand: *mut c_char,  // наименование ЦПУ
@@ -83,7 +85,6 @@ pub struct NetworksStaticInfoArray {
     pub len: usize,
 }
 
-
 #[cfg(target_os = "windows")]
 #[repr(C)]
 pub struct ServiceInfo {
@@ -98,12 +99,16 @@ pub struct ServiceInfoArray {
     pub data: *mut ServiceInfo,
     pub len: usize,
 }
+
 // ===================== ФУНКЦИИ ДЛЯ СТАТИЧЕСКОЙ ИНФОРМАЦИИ =====================
 
 #[no_mangle]
 pub extern "C" fn get_cpu_static_info() -> *mut CpuStaticInfo {
-    let mut sys = System::new_all();
-    sys.refresh_all();
+    // Используем глобальный объект и обновляем только CPU и процессы
+    let mut sys = SYS.lock().unwrap();
+    sys.refresh_cpu();
+    sys.refresh_processes();
+
     let brand = if let Some(cpu) = sys.cpus().first() {
         cpu.brand().to_string()
     } else {
@@ -120,18 +125,8 @@ pub extern "C" fn get_cpu_static_info() -> *mut CpuStaticInfo {
         0.0
     };
     
-    let work_time= if let Some(cpu) = sys.cpus().first() {
-        sys.uptime() as i64
-    } else {
-        0
-    };
-
-    let process= if let Some(cpu) = sys.cpus().first() {
-        sys.processes().len() as i64
-    } else {
-        0
-    };
-
+    let work_time = sys.uptime() as i64;
+    let process = sys.processes().len() as i64;
     let core_count = num_cpus::get_physical();
     let info = CpuStaticInfo {
         brand: CString::new(brand).unwrap().into_raw(),
@@ -255,9 +250,10 @@ fn get_modern_memory_format(smbios: Option<u32>, memory_type: Option<u32>) -> &'
 
 #[no_mangle]
 pub extern "C" fn get_memory_static_info() -> MemoryStaticInfo {
-    let mut sys = System::new_all();
-    sys.refresh_all();
-    // Пример значений: скорость 2400 МГц и формата DDR4 (используем smbios = Some(26))
+    // Выбираем обновление только для памяти
+    let mut sys = SYS.lock().unwrap();
+    sys.refresh_memory();
+    // Пример значений: скорость 2400 МГц и формат DDR4 (используем smbios = Some(26))
     let mem_speed = 2400;
     let mem_format_str = get_modern_memory_format(Some(26), None);
     let mem_format = CString::new(mem_format_str).unwrap();
@@ -272,8 +268,9 @@ pub extern "C" fn get_memory_static_info() -> MemoryStaticInfo {
 
 #[no_mangle]
 pub extern "C" fn get_disk_static_info_array() -> DiskStaticInfoArray {
-    let mut sys = System::new_all();
-    sys.refresh_all();
+    // Обновляем только дисковую подсистему
+    let mut sys = SYS.lock().unwrap();
+    sys.refresh_disks();
     let disks = sys.disks();
     let len = disks.len();
     let mut vec: Vec<DiskStaticInfo> = Vec::with_capacity(len);
@@ -305,41 +302,23 @@ pub extern "C" fn free_disk_static_info_array(array: DiskStaticInfoArray) {
 
 #[no_mangle]
 pub extern "C" fn get_networks_static_info_array() -> NetworksStaticInfoArray {
-    let mut sys = System::new_all();
-    sys.refresh_all();  // Обновляем все данные
+    // Обновляем только сетевую подсистему
+    let mut sys = SYS.lock().unwrap();
     sys.refresh_networks();
-    sys.refresh_networks_list();
     let networks = sys.networks();
-    
-    let mut vec: Vec<NetworksStaticInfo> = Vec::new();
+    let len = networks.iter().count();
+    let mut vec: Vec<NetworksStaticInfo> = Vec::with_capacity(len);
+    // Получаем локальный IP-адрес (используем local_ipaddress = "0.1.2")
     let local_ip = local_ipaddress::get().unwrap_or("0.0.0.0".to_string());
-    
     for (iface_name, network) in networks {
-        // Пропускаем виртуальные и неактивные интерфейсы
-        if iface_name.contains("vEthernet") || 
-           iface_name.contains("VirtualBox") || 
-           iface_name.contains("VMware") ||
-           iface_name.contains("Loopback") {
-            continue;
-        }
-        
-        // Получаем текущие значения
-        let transmitted = network.transmitted();
-        let received = network.received();
-        
-        // Если интерфейс активен (есть хоть какой-то трафик)
-        if transmitted > 0 || received > 0 {
-            let name = iface_name.to_string();
-            vec.push(NetworksStaticInfo {
-                name: CString::new(name).unwrap().into_raw(),
-                ipv4: CString::new(local_ip.clone()).unwrap().into_raw(),
-                send: transmitted,
-                recive: received,
-            });
-        }
+        let name = iface_name.to_string();
+        vec.push(NetworksStaticInfo {
+            name: CString::new(name).unwrap().into_raw(),
+            ipv4: CString::new(local_ip.clone()).unwrap().into_raw(),
+            send: network.transmitted(),
+            recive: network.received(),
+        });
     }
-    
-    let len = vec.len();
     let data_ptr = vec.as_mut_ptr();
     std::mem::forget(vec);
     NetworksStaticInfoArray { data: data_ptr, len }
@@ -362,9 +341,9 @@ pub extern "C" fn free_networks_static_info_array(array: NetworksStaticInfoArray
         }
     }
 }
-// ===================== ФУНКЦИИ ДЛЯ ПОДБОРА ИНФОРМАЦИИ О ПРОЦЕССАХ (ПОТОКОВЫЙ МОДУЛЬ) =====================
 
-/// C‑совместимая структура для информации о процессе.
+// ===================== ПРОЦЕССНЫЙ МОДУЛЬ =====================
+
 #[repr(C)]
 pub struct ProcessInfo {
     pub pid: *mut c_char,      // идентификатор процесса (строка)
@@ -375,14 +354,12 @@ pub struct ProcessInfo {
     pub written_kb: f64,       // записано (КБ)
 }
 
-/// Обёртка для массива структур с информацией о процессах.
 #[repr(C)]
 pub struct ProcessInfoArray {
     pub data: *mut ProcessInfo,
     pub len: usize,
 }
 
-/// Внутренняя структура для хранения данных о процессах (используются Rust‑строки).
 #[derive(Clone)]
 struct ProcessInfoInternal {
     pub pid: String,
@@ -405,18 +382,22 @@ lazy_static! {
 
 fn create_process_info_internal(pid: &sysinfo::Pid, process: &sysinfo::Process) -> ProcessInfoInternal {
     let disk_usage = process.disk_usage();
+    let total_cores = SYS.lock().unwrap().cpus().len() as f32;
+
+    // Внутри цикла для каждого процесса:
     ProcessInfoInternal {
         pid: pid.to_string(),
         name: process.name().to_string(),
-        cpu_usage: process.cpu_usage(),
+        cpu_usage: process.cpu_usage() / total_cores,  // нормализованное значение
         memory_mb: process.memory() as f64 / (1024.0 * 1024.0),
         read_kb: disk_usage.total_read_bytes as f64 / 1024.0,
         written_kb: disk_usage.total_written_bytes as f64 / 1024.0,
     }
+
 }
 
 fn process_collector_thread(running: Arc<AtomicBool>, info: Arc<Mutex<Vec<ProcessInfoInternal>>>) {
-    let mut sys = System::new_all(); // создаём один объект System
+    let mut sys = sysinfo::System::new_all();
     while running.load(Ordering::Relaxed) {
         sys.refresh_processes();
         sys.refresh_cpu();
@@ -434,8 +415,6 @@ fn process_collector_thread(running: Arc<AtomicBool>, info: Arc<Mutex<Vec<Proces
     }
 }
 
-/// 1) Запуск фонового потока сбора информации о процессах.
-/// Если поток уже запущен, возвращает false.
 #[no_mangle]
 pub extern "C" fn start_process_collector() -> bool {
     let mut collector_opt = PROCESS_COLLECTOR.lock().unwrap();
@@ -457,9 +436,6 @@ pub extern "C" fn start_process_collector() -> bool {
     true
 }
 
-/// 2) Получение актуальной информации о процессах.
-/// Функция возвращает ProcessInfoArray, содержащую указатель на массив структур и число элементов.
-/// Память для возвращённого массива необходимо освободить с помощью free_process_info_array.
 #[no_mangle]
 pub extern "C" fn get_process_info_array() -> ProcessInfoArray {
     let collector_opt = PROCESS_COLLECTOR.lock().unwrap();
@@ -487,9 +463,6 @@ pub extern "C" fn get_process_info_array() -> ProcessInfoArray {
     }
 }
 
-/// 3) Остановка фонового потока сбора информации о процессах.
-/// Функция останавливает поток, ожидает его завершения и освобождает ресурсы.
-/// Возвращает true, если поток был успешно остановлен.
 #[no_mangle]
 pub extern "C" fn stop_process_collector() -> bool {
     let mut collector_opt = PROCESS_COLLECTOR.lock().unwrap();
@@ -508,7 +481,6 @@ pub extern "C" fn stop_process_collector() -> bool {
     }
 }
 
-/// Освобождение памяти, выделенной для массива ProcessInfoArray.
 #[no_mangle]
 pub extern "C" fn free_process_info_array(array: ProcessInfoArray) {
     if array.data.is_null() { return; }
@@ -524,86 +496,42 @@ pub extern "C" fn free_process_info_array(array: ProcessInfoArray) {
         }
     }
 }
-//ДЛЯ WINDOWS
-//ВАНЯ, допиши выше зависимости и добавь их в cargo.toml. Функцию
-#[unsafe(no_mangle)] 
-pub extern "C" fn kill_process(pid: u32) -> i32 {
-    unsafe {
-        let process_handle: HANDLE = OpenProcess(PROCESS_TERMINATE, 0, pid);
-        if process_handle.is_null() {
-            return -1;  // Ошибка: не удалось открыть процесс
-        }
-
-        // Завершаем процесс
-        if TerminateProcess(process_handle, 1) == 0 {
-            CloseHandle(process_handle); 
-            return -2;  // Ошибка: не удалось завершить процесс
-        }
-
-        CloseHandle(process_handle);
-        return 0;
-    }
-}
-
-#[no_mangle]
-pub extern "C" fn get_proc_path(pid: u32) -> *const c_char {
-    let mut filename: [u16; 260] = [0; 260];
-
-    let process_handle: HANDLE = unsafe {
-        OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, 0, pid)
-    };
-
-    if process_handle.is_null() {
-        return ptr::null();
-    }
-
-    let result = unsafe {
-        GetModuleFileNameExW(process_handle, ptr::null_mut(), filename.as_mut_ptr(), filename.len() as u32)
-    };
-
-    unsafe { CloseHandle(process_handle) };
-
-    if result == 0 {
-        return ptr::null();
-    }
-
-    // Convert to UTF-16 string and then to CString
-    let filename_osstr = OsString::from_wide(&filename[..result as usize]);
-    let path = filename_osstr.to_string_lossy().into_owned();
-    
-    match CString::new(path) {
-        Ok(c_string) => c_string.into_raw(), // Transfer ownership to caller
-        Err(_) => ptr::null(),
-    }
-}
-
-//ДЛЯ MAC OS
-/// Функция для завершения процесса по идентификатору.
-// #[no_mangle]
-// pub extern "C" fn kill_process(pid: u32) -> i32 {
-//     let result = unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) };
-//     if result == 0 {
-//         0 
-//     } else {
-//         -1 
-//     }
-// }
 
 #[cfg(target_os = "windows")]
 #[no_mangle]
 pub extern "C" fn get_services_info_array() -> ServiceInfoArray {
-    let output = Command::new("powershell")
+    let output = Command::new("C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe")
         .args(&[
+            "-ExecutionPolicy", "Bypass",
             "-Command",
             "Get-CimInstance Win32_Service | Select-Object ProcessId, Name, Status | ConvertTo-Json -Compress"
         ])
-        .output()
-        .expect("Не удалось выполнить команду PowerShell");
+        .output();
+
+    let output = match output {
+        Ok(out) => out,
+        Err(e) => {
+            eprintln!("PowerShell execution error: {:?}", e);
+            return ServiceInfoArray { data: std::ptr::null_mut(), len: 0 };
+        }
+    };
 
     if output.status.success() {
         let output_str = String::from_utf8_lossy(&output.stdout);
-        let services: Vec<serde_json::Value> = serde_json::from_str(&output_str)
-            .expect("Не удалось распарсить JSON");
+        let json_str = if output_str.trim_start().starts_with('[') {
+            output_str.to_string()
+        } else {
+            format!("[{}]", output_str)
+        };
+        
+        let services: Vec<serde_json::Value> = match serde_json::from_str(&json_str) {
+            Ok(data) => data,
+            Err(e) => {
+                eprintln!("JSON parsing error: {:?}", e);
+                return ServiceInfoArray { data: std::ptr::null_mut(), len: 0 };
+            }
+        };
+        
         let len = services.len();
         let mut vec: Vec<ServiceInfo> = Vec::with_capacity(len);
         for service in services {
@@ -622,6 +550,8 @@ pub extern "C" fn get_services_info_array() -> ServiceInfoArray {
         std::mem::forget(vec);
         ServiceInfoArray { data: data_ptr, len }
     } else {
+        let error_msg = String::from_utf8_lossy(&output.stderr);
+        eprintln!("PowerShell error: {}", error_msg);
         ServiceInfoArray { data: std::ptr::null_mut(), len: 0 }
     }
 }
@@ -644,7 +574,69 @@ pub extern "C" fn free_services_info_array(array: ServiceInfoArray) {
         }
     }
 }
-/// Функция для освобождения памяти, выделенной функциями, возвращающими C‑строку.
+
+// ===================== ФУНКЦИЯ ДЛЯ ПОЛУЧЕНИЯ ПУТИ К ПРОЦЕССУ НА WINDOWS =====================
+#[cfg(target_os = "windows")]
+#[no_mangle]
+pub extern "C" fn get_proc_path(pid: u32) -> *const c_char {
+    use std::ptr;
+    use winapi::um::processthreadsapi::OpenProcess;
+    use winapi::um::winnt::{PROCESS_QUERY_INFORMATION, PROCESS_VM_READ};
+    use winapi::um::handleapi::CloseHandle;
+    use winapi::um::psapi::GetModuleFileNameExW;
+    use std::os::windows::ffi::OsStringExt;
+    use std::ffi::OsString;
+    
+    let mut filename: [u16; 260] = [0; 260];
+
+    let process_handle = unsafe {
+        OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, 0, pid)
+    };
+
+    if process_handle.is_null() {
+        return ptr::null();
+    }
+
+    let result = unsafe {
+        GetModuleFileNameExW(process_handle, ptr::null_mut(), filename.as_mut_ptr(), filename.len() as u32)
+    };
+
+    unsafe { CloseHandle(process_handle) };
+
+    if result == 0 {
+        return ptr::null();
+    }
+
+    // Преобразуем полученный wide-строковый буфер в CString
+    let os_string = OsString::from_wide(&filename[..result as usize]);
+    let string = os_string.to_string_lossy().into_owned();
+    CString::new(string).unwrap().into_raw()
+}
+
+// Добавьте этот код (например, в конце файла)
+#[cfg(target_os = "windows")]
+#[no_mangle]
+pub extern "C" fn kill_process(pid: u32) -> i32 {
+    use winapi::um::processthreadsapi::{OpenProcess, TerminateProcess};
+    use winapi::um::winnt::PROCESS_TERMINATE;
+    use winapi::um::handleapi::CloseHandle;
+
+    unsafe {
+        // Открываем процесс с правом завершения
+        let handle = OpenProcess(PROCESS_TERMINATE, 0, pid);
+        if handle.is_null() {
+            return -1; // Не удалось открыть процесс
+        }
+        // Завершаем процесс, передаём код завершения (например, 1)
+        let result = TerminateProcess(handle, 1);
+        CloseHandle(handle);
+        if result == 0 {
+            return -2; // Завершение не удалось
+        }
+        0 // Успех
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn free_string(s: *mut c_char) {
     if s.is_null() { return; }
