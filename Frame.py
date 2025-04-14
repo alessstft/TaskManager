@@ -88,6 +88,17 @@ class TaskManager:
         )
         self.end_task_btn.pack(pady=10)
 
+        #Получение пути процесса
+        self.get_path_btn = tk.Button(
+            self.processes_frame,
+            text="Получить путь",
+            bg="#5c2d5c",
+            fg="white",
+            font=("Arial", 12, "bold"),
+            command=self._get_path
+        )
+        self.get_path_btn.pack(pady = 10)
+
     def _setup_services_tab(self):
         # Таблица служб
         columns = ("Имя", "ID служб", "Состояние")
@@ -274,6 +285,24 @@ class TaskManager:
                 self._process_selected = False
             else:
                 messagebox.showerror("Ошибка", f"Не удалось завершить процесс {process_name} (PID: {pid}).")
+    
+    def _get_path(self):
+        """Gets process path, using dll function"""
+        selected = self.process_tree.selection()
+        if not selected:
+            messagebox.showwarning("Предупреждение", "Выберите процесс для получения пути")
+            return
+        item_values = self.process_tree.item(selected[0])['values']
+        pid_str = item_values[0]
+        process_name = item_values[1]
+        try:
+            pid = int(pid_str)
+        except ValueError:
+            messagebox.showerror("Ошибка", f"Неверный формат PID: {pid_str}")
+            return
+        path = self.system_monitor.get_proc_path(pid)
+        messagebox.showinfo("Успех", f"Путь {process_name} : {path}")
+
 
     def _on_process_select(self, event):
         """Обработчик выбора процесса"""

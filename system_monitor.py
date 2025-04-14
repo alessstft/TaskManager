@@ -108,6 +108,8 @@ class SystemMonitor:
         self.dll.stop_process_collector.restype = c_int
         self.dll.kill_process.argtypes = [c_uint32]
         self.dll.kill_process.restype = c_int
+        self.dll.get_proc_path.argtypes = [c_uint32]
+        self.dll.get_proc_path.restype = c_char_p
 
         
     def start_monitoring(self, update_interval: float = 2.0):
@@ -279,6 +281,10 @@ class SystemMonitor:
         result = self.dll.kill_process(pid)
         return result == 0
 
+    def get_proc_path(self, pid: int) -> str:
+        path_ptr = self.dll.get_proc_path(pid)
+        path = path_ptr.decode("utf-8") if path_ptr is not None else "NULL"
+        return path
 
     def __del__(self):
         if hasattr(self, '_update_thread'):
