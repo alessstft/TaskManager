@@ -381,4 +381,12 @@ class TaskManager:
 if __name__ == "__main__":
     root = tk.Tk()
     app = TaskManager(root)
+    
+    # Пытаемся загрузить иконку
+    try:
+        icon = tk.PhotoImage(file='TaskManager-Boba/icon.png')
+        root.iconphoto(True, icon)
+    except:
+        pass  # Просто пропускаем, если иконка не найдена
+    
     root.mainloop()
