@@ -1,37 +1,35 @@
 import tkinter as tk
 from tkinter import ttk, Canvas, messagebox
+import psutil
 import threading
-import time
 from system_monitor import SystemMonitor
+from tkinter import *
+from tkinter import PhotoImage
 
 class TaskManager:
     def __init__(self, root):
         self.root = root
         self.root.title("Диспетчер задач")
-        self.root.geometry("800x500")
+        self.root.geometry("900x600")
         self.root.configure(bg="#2d2d2d")
 
-        # Инициализация SystemMonitor
         self.system_monitor = SystemMonitor()
-        
-        # Буфер для данных
-        self._cpu_info = None
-        self._memory_info = None
-        self._process_info = None
         self._data_lock = threading.Lock()
-        self._process_selected = False
-        
-        # Настройка стилей
+
+        # Инициализация истории для всех метрик
+        self.cpu_history = []
+        self.memory_history = []
+        self.disk_history = []
+        self.network_history = []
+        self.max_history_size = 60
+        self.metrics = []
+        self.current_graph = "cpu"  # Текущий отображаемый график
+
         self._setup_styles()
-        
-        # Создание интерфейса
         self._create_interface()
-        
-        # Запуск мониторинга с интервалом 2.0 секунд
-        self.system_monitor.register_callback(self._update_data_buffer)
-        self.system_monitor.start_monitoring(update_interval=2.0)
-        
-        # Запуск обновления GUI каждые 1500 мс
+
+        self.system_monitor.register_callback(self._update_metrics_data)
+        self.system_monitor.start_monitoring(update_interval=1.0)
         self._schedule_gui_update()
 
     def _setup_styles(self):
@@ -44,27 +42,25 @@ class TaskManager:
         style.configure("Treeview.Heading", background="#5c2d5c", foreground="white")
 
     def _create_interface(self):
-        # Создание notebook
         self.notebook = ttk.Notebook(self.root)
         self.notebook.pack(fill=tk.BOTH, expand=True)
 
-        # Вкладка "Процессы"
+        # Вкладка процессы
         self.processes_frame = tk.Frame(self.notebook, bg="#872187")
         self.notebook.add(self.processes_frame, text="Процессы")
         self._setup_processes_tab()
 
-        # Вкладка "Производительность"
-        self.performance_frame = tk.Frame(self.notebook, bg="#872187")
+        # Вкладка производительность
+        self.performance_frame = tk.Frame(self.notebook, bg="#1e1e1e")
         self.notebook.add(self.performance_frame, text="Производительность")
         self._setup_performance_tab()
 
-        # Вкладка "Службы"
+        # Вкладка службы
         self.services_frame = tk.Frame(self.notebook, bg="#872187")
         self.notebook.add(self.services_frame, text="Службы")
         self._setup_services_tab()
 
     def _setup_processes_tab(self):
-        # Таблица процессов
         columns = ("ID процесса", "Имя", "ЦП", "Память", "Диск", "Сеть", "GPU", "Энерг-ие")
         self.process_tree = ttk.Treeview(self.processes_frame, columns=columns, show="headings")
 
@@ -72,35 +68,14 @@ class TaskManager:
             self.process_tree.heading(col, text=col)
             self.process_tree.column(col, width=80, anchor="center")
         self.process_tree.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-        
-        # Привязываем обработчики событий
-        self.process_tree.bind('<<TreeviewSelect>>', self._on_process_select)
-        self.process_tree.bind('<Button-3>', self._on_right_click)  # Правый клик
 
-        # Кнопка завершения задачи
-        self.end_task_btn = tk.Button(
-            self.processes_frame,
-            text="Завершить задачу",
-            bg="#5c2d5c",
-            fg="white",
-            font=("Arial", 12, "bold"),
-            command=self._end_task
-        )
+        self.end_task_btn = tk.Button(self.processes_frame, text="Завершить задачу",
+                                      bg="#5c2d5c", fg="white",
+                                      font=("Arial", 12, "bold"),
+                                      command=self._end_task)
         self.end_task_btn.pack(pady=10)
 
-        #Получение пути процесса
-        self.get_path_btn = tk.Button(
-            self.processes_frame,
-            text="Получить путь",
-            bg="#5c2d5c",
-            fg="white",
-            font=("Arial", 12, "bold"),
-            command=self._get_path
-        )
-        self.get_path_btn.pack(pady = 10)
-
     def _setup_services_tab(self):
-        # Таблица служб
         columns = ("Имя", "ID служб", "Состояние")
         self.services_tree = ttk.Treeview(self.services_frame, columns=columns, show="headings")
 
@@ -115,212 +90,221 @@ class TaskManager:
         self.services_tree.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 
     def _setup_performance_tab(self):
-        # Создаем Canvas для графиков
-        self.canvas = Canvas(self.performance_frame, bg="#872187", highlightthickness=0)
-        self.canvas.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
-        
-        self.metrics_var = tk.StringVar()
-        self.metrics_label = tk.Label(
-            self.performance_frame,
-            textvariable=self.metrics_var,
-            bg="#872187",
-            fg="white",
-            font=("Arial", 12)
-        )
-        self.metrics_label.pack(pady=10)
-        
-        # Инициализация метрик
-        self.metrics = [
-            {"label": "ЦП"},
-            {"label": "Память"},
-            {"label": "Диск"},
-            {"label": "Ethernet"},
-            {"label": "GPU"}
-        ]
+        self.canvas = Canvas(self.performance_frame, bg="#1e1e1e", highlightthickness=0)
+        self.canvas.pack(fill="both", expand=True)
         self.canvas.bind("<Configure>", self._update_canvas)
 
-    def _update_data_buffer(self, cpu_info, memory_info, process_info):
-        """Обновляет буфер данных в отдельном потоке"""
-        with self._data_lock:
-            self._cpu_info = cpu_info
-            self._memory_info = memory_info
-            self._process_info = process_info
+    def _update_metrics_data(self):
+        """Обновляет данные всех метрик"""
+        # CPU
+        cpu_percent = psutil.cpu_percent(interval=None)
+        self.cpu_history.append(cpu_percent)
+        if len(self.cpu_history) > self.max_history_size:
+            self.cpu_history.pop(0)
+
+        # Memory
+        memory = self.system_monitor._get_memory_info()
+        memory_percent = (memory['used'] / memory['total']) * 100
+        self.memory_history.append(memory_percent)
+        if len(self.memory_history) > self.max_history_size:
+            self.memory_history.pop(0)
+
+        # Disk
+        disk = self.system_monitor.get_disk_info()
+        total_disk = sum(d['total_space'] for d in disk)
+        used_disk = total_disk - sum(d['available_space'] for d in disk)
+        disk_percent = (used_disk / total_disk) * 100 if total_disk > 0 else 0
+        self.disk_history.append(disk_percent)
+        if len(self.disk_history) > self.max_history_size:
+            self.disk_history.pop(0)
+
+        # Network
+        net = self.system_monitor.get_network_info()
+        net_speed = sum((n['send_speed'] + n['recv_speed']) * 8 / 1024 / 1024 for n in net)
+        self.network_history.append(min(net_speed, 100))  # Ограничиваем до 100%
+        if len(self.network_history) > self.max_history_size:
+            self.network_history.pop(0)
+
+        self.root.after(1000, self._update_metrics_data)
+
+    def _update_canvas(self, event=None):
+        self.canvas.delete("all")
+
+        width = self.canvas.winfo_width()
+        height = self.canvas.winfo_height()
+
+        # График производительности
+        self._draw_cpu_graph(width, height)
+
+        # Метрики
+        self._update_performance_metrics()
+        self._draw_metrics_circles(width, height)
+
+    def _draw_cpu_graph(self, width, height):
+        """Рисует график для выбранной метрики"""
+        padding = 40
+        graph_width = width - 2 * padding
+        graph_height = height // 2 - padding
+
+        grid_color = "#3c3c3c"
+        text_color = "#cccccc"
+
+        # Выбираем данные для отображения и настраиваем цвет
+        if self.current_graph == "cpu":
+            data = self.cpu_history
+            title = "ЦП"
+            graph_color = "#00c3ff"  # Синий для CPU
+        elif self.current_graph == "memory":
+            data = self.memory_history
+            title = "Память"
+            graph_color = "#ff6b6b"  # Красный для памяти
+        elif self.current_graph == "disk":
+            data = self.disk_history
+            title = "Диск"
+            graph_color = "#4caf50"  # Зеленый для диска
+        elif self.current_graph == "network":
+            data = self.network_history
+            title = "Сеть"
+            graph_color = "#ff9800"  # Оранжевый для сети
+        elif self.current_graph == "gpu":
+            data = [0] * self.max_history_size  # Заглушка для GPU
+            title = "GPU"
+            graph_color = "#9c27b0"  # Фиолетовый для GPU
+        else:
+            data = self.cpu_history
+            title = "ЦП"
+            graph_color = "#00c3ff"
+
+        # Рисуем сетку и подписи
+        for i in range(0, 101, 20):
+            y = height // 2 - (i / 100 * graph_height)
+            self.canvas.create_line(padding, y, width - padding, y, fill=grid_color)
+            self.canvas.create_text(padding - 10, y, text=f"{i}%", fill=text_color, anchor="e", font=("Segoe UI", 10))
+
+        num_lines = 6
+        for i in range(num_lines + 1):
+            x = padding + (i / num_lines) * graph_width
+            self.canvas.create_line(x, height // 2 - graph_height, x, height // 2, fill=grid_color)
+            seconds_ago = self.max_history_size - (i * self.max_history_size // num_lines)
+            self.canvas.create_text(x, height // 2 + 15, text=f"-{seconds_ago}s", fill=text_color, anchor="n", font=("Segoe UI", 9))
+
+        # Рисуем график
+        if len(data) > 1:
+            points = []
+            visible = data[-self.max_history_size:]
+            for i, value in enumerate(visible):
+                x = padding + (i / (self.max_history_size - 1)) * graph_width
+                y = height // 2 - (value / 100 * graph_height)
+                points.extend([x, y])
+            self.canvas.create_line(points, fill=graph_color, width=2, smooth=True)
+
+        if data:
+            self.canvas.create_text(padding, height // 2 - graph_height - 20, 
+                                  text=f"{title}: {data[-1]:.1f}%", 
+                                  fill="white", 
+                                  anchor="w", 
+                                  font=("Segoe UI", 14, "bold"))
+
+    def _draw_metrics_circles(self, width, height):
+        circle_size = min(width, height) // 10
+        positions = [
+            (width * 0.1, height * 0.75),
+            (width * 0.3, height * 0.75),
+            (width * 0.5, height * 0.75),
+            (width * 0.7, height * 0.75),
+            (width * 0.9, height * 0.75),
+        ]
+
+        for i, (x, y) in enumerate(positions):
+            if i < len(self.metrics):
+                # Создаем круг с тегом для кликабельности
+                circle = self.canvas.create_oval(
+                    x - circle_size, y - circle_size,
+                    x + circle_size, y + circle_size,
+                    fill="#5c2d5c", outline="white",
+                    tags=f"circle_{i}"
+                )
+                
+                # Добавляем текст
+                self.canvas.create_text(
+                    x, y,
+                    text=self.metrics[i],
+                    fill="white",
+                    font=("Arial", 10, "bold"),
+                    tags=f"text_{i}"
+                )
+                
+                # Привязываем обработчик клика
+                self.canvas.tag_bind(f"circle_{i}", "<Button-1>", lambda e, idx=i: self._on_circle_click(idx))
+                self.canvas.tag_bind(f"text_{i}", "<Button-1>", lambda e, idx=i: self._on_circle_click(idx))
+
+    def _on_circle_click(self, index):
+        """Обработчик клика по кругу"""
+        if index < len(self.metrics):
+            # Устанавливаем текущий график в зависимости от выбранного круга
+            if "ЦП" in self.metrics[index]:
+                self.current_graph = "cpu"
+            elif "Память" in self.metrics[index]:
+                self.current_graph = "memory"
+            elif "Диск" in self.metrics[index]:
+                self.current_graph = "disk"
+            elif "Ethernet" in self.metrics[index]:
+                self.current_graph = "network"
+            elif "GPU" in self.metrics[index]:
+                self.current_graph = "gpu"
+            
+            # Обновляем отображение
+            self._update_canvas()
+
+    def _update_performance_metrics(self):
+        memory = self.system_monitor._get_memory_info()
+        disk = self.system_monitor.get_disk_info()
+        net = self.system_monitor.get_network_info()
+        cpu_percent = psutil.cpu_percent(interval=None)
+
+        total_disk = sum(d['total_space'] for d in disk)
+        used_disk = total_disk - sum(d['available_space'] for d in disk)
+        net_speed = sum((n['send_speed'] + n['recv_speed']) * 8 / 1024 / 1024 for n in net)
+
+        net_str = f"{net_speed:.1f} Mbps" if net_speed > 0 else "0 Mbps"
+
+        self.metrics = [
+            f"ЦП\n{cpu_percent:.1f}%",
+            f"Память\n{memory['used']:.1f}/{memory['total']:.1f} GB",
+            f"Ethernet\n{net_str}",
+            f"GPU\nN/A",
+            f"Диск\n{used_disk:.0f}/{total_disk:.0f} GB"
+        ]
 
     def _schedule_gui_update(self):
-        """Планирует обновление GUI"""
-        self._update_gui()
-        self.root.after(1500, self._schedule_gui_update)  # обновление GUI каждую 1.5 сек
-
-    def _update_gui(self):
-        """Обновляет GUI используя данные из буфера"""
-        with self._data_lock:
-            if all(x is not None for x in (self._cpu_info, self._memory_info, self._process_info)):
-                self._update_processes(self._process_info)
-                self._update_performance_metrics()
-                self._update_services()
+        self._update_services()
+        # self._update_processes([])  # Здесь должен быть список процессов, если получаем его
+        self._update_canvas()
+        self.root.after(1000, self._schedule_gui_update)
 
     def _update_services(self):
-        """Обновляет таблицу служб"""
         self.services_tree.delete(*self.services_tree.get_children())
         services = self.system_monitor.get_services_info()
         for service in services:
-            self.services_tree.insert("", tk.END, values=(
-                service['name'],
-                service['process_id'],
-                service['status']
-            ))
-
-    def _update_processes(self, processes):
-        """Обновляет таблицу процессов"""
-        if self._process_selected:
-            return
-            
-        selected_items = self.process_tree.selection()
-        selected_values = [self.process_tree.item(item)['values'][0] for item in selected_items]
-        self.process_tree.delete(*self.process_tree.get_children())
-        for proc in processes:
-            values = (
-                proc['pid'],                     # ID процесса (PID)
-                proc['name'],                    # Имя процесса
-                f"{proc['cpu_usage']:.1f}%",      # ЦП
-                f"{proc['memory_mb']:.1f} MB",     # Память
-                f"{proc['read_kb'] / 1024:.1f} MB",# Диск (перевод из КБ в МБ)
-                "N/A",                           # Сеть (если не собирается)
-                "N/A",                           # GPU
-                "Normal"                         # Энергопотребление (пример)
-            )
-            item = self.process_tree.insert("", tk.END, values=values)
-            if values[0] in selected_values:
-                self.process_tree.selection_add(item)
-
-    def _update_performance_metrics(self):
-        """Обновляет метрики производительности"""
-        disk_info = self.system_monitor.get_disk_info()
-        net_info = self.system_monitor.get_network_info()
-
-        total_space = sum(disk['total_space'] for disk in disk_info)
-        available_space = sum(disk['available_space'] for disk in disk_info)
-        used_space = total_space - available_space
-
-        total_network_speed = 0
-        for net in net_info:
-            if not any(x in net['name'].lower() for x in ['virtual', 'vmware', 'loopback']):
-                total_network_speed += (net['send_speed'] + net['recv_speed']) /(1024 * 1024)
-
-        if total_network_speed < 0.01:
-            network_text = "0 Mbps"
-        elif total_network_speed < 1:
-            network_text = f"{total_network_speed:.2f} Mbps"
-        elif total_network_speed < 10:
-            network_text = f"{total_network_speed:.1f} Mbps"
-        else:
-            network_text = f"{int(total_network_speed)} Mbps"
-
-        memory_info = self.system_monitor._get_memory_info()
-        memory_used = memory_info['used']
-        memory_total = memory_info['total']
-        cpu_percent = self.system_monitor.get_cpu_percent()
-
-        disk_text = f"{used_space:.0f}/{total_space:.0f}"
-        metrics = [
-            f"CPU: {cpu_percent:.1f}%",
-            f"RAM: {memory_used:.1f}/{memory_total:.1f} GB",
-            f"Disk: {disk_text} GB",
-            f"Network: {network_text}"
-        ]
-        self.metrics_var.set(" | ".join(metrics))
-        self.metrics = [
-            {"label": f"ЦП\n{cpu_percent:.1f}%"},
-            {"label": f"Память\n{memory_used:.1f}/{memory_total:.1f} GB"},
-            {"label": f"Диск\n{disk_text} GB"},
-            {"label": f"Ethernet\n{network_text}"},
-            {"label": f"GPU\n0%"}
-        ]
-        self._update_canvas()
-
-    def _update_canvas(self, event=None):
-        """Обновляет отрисовку кругов на канвасе"""
-        self.canvas.delete("all")
-        width = self.canvas.winfo_width()
-        height = self.canvas.winfo_height()
-        circle_size = min(width, height) // 6
-        positions = [
-            (width * 0.2, height * 0.3),
-            (width * 0.5, height * 0.3),
-            (width * 0.8, height * 0.3),
-            (width * 0.35, height * 0.7),
-            (width * 0.65, height * 0.7)
-        ]
-        for i, (x, y) in enumerate(positions):
-            if i < len(self.metrics):
-                self.canvas.create_oval(
-                    x - circle_size, y - circle_size,
-                    x + circle_size, y + circle_size,
-                    fill="#5c2d5c", outline="white"
-                )
-                self.canvas.create_text(
-                    x, y,
-                    text=self.metrics[i]["label"],
-                    fill="white",
-                    font=("Arial", 12, "bold")
-                )
+            self.services_tree.insert("", tk.END, values=(service['name'], service['process_id'], service['status']))
 
     def _end_task(self):
-        """Завершает выбранный процесс, используя функцию из DLL"""
         selected = self.process_tree.selection()
         if not selected:
             messagebox.showwarning("Предупреждение", "Выберите процесс для завершения")
             return
-        item_values = self.process_tree.item(selected[0])['values']
-        pid_str = item_values[0]
-        try:
-            pid = int(pid_str)
-        except ValueError:
-            messagebox.showerror("Ошибка", f"Неверный формат PID: {pid_str}")
-            return
-        process_name = item_values[1]
-        if messagebox.askyesno("Подтверждение", f"Вы уверены, что хотите завершить процесс {process_name} (PID: {pid})?"):
-            if self.system_monitor.kill_process(pid):
-                messagebox.showinfo("Успех", f"Процесс {process_name} (PID: {pid}) успешно завершён.")
-                self._process_selected = False
-            else:
-                messagebox.showerror("Ошибка", f"Не удалось завершить процесс {process_name} (PID: {pid}).")
-    
-    def _get_path(self):
-        """Gets process path, using dll function"""
-        selected = self.process_tree.selection()
-        if not selected:
-            messagebox.showwarning("Предупреждение", "Выберите процесс для получения пути")
-            return
-        item_values = self.process_tree.item(selected[0])['values']
-        pid_str = item_values[0]
-        process_name = item_values[1]
-        try:
-            pid = int(pid_str)
-        except ValueError:
-            messagebox.showerror("Ошибка", f"Неверный формат PID: {pid_str}")
-            return
-        path = self.system_monitor.get_proc_path(pid)
-        messagebox.showinfo("Успех", f"Путь {process_name} : {path}")
-
-
-    def _on_process_select(self, event):
-        """Обработчик выбора процесса"""
-        if self.process_tree.selection():
-            self._process_selected = True
-        else:
-            self._process_selected = False
-
-    def _on_right_click(self, event):
-        """Обработчик правого клика - снимает выделение"""
-        self.process_tree.selection_remove(self.process_tree.selection())
-        self._process_selected = False
+        process_name = self.process_tree.item(selected[0])['values'][0]
+        if messagebox.askyesno("Подтверждение", f"Завершить процесс {process_name}?"):
+            # Завершение процесса (добавить реализацию)
+            pass
 
     def __del__(self):
-        if hasattr(self, 'system_monitor'):
-            self.system_monitor.stop_monitoring()
+        self.system_monitor.stop_monitoring()
+
 
 if __name__ == "__main__":
     root = tk.Tk()
     app = TaskManager(root)
+    icon = PhotoImage(file='icon.png')
+    root.iconphoto(True, icon)
     root.mainloop()
