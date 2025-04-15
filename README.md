@@ -16,7 +16,9 @@ Python(tkinter), который создает GUI для отображения
     
 3. **Детализованные данные:**  
     Реализована возможность нажать на кнопки в окне "Производительность", чтобы получить более подробные данные о системе.
-    
+
+![photo_5458474555417949578_y](https://github.com/user-attachments/assets/1f461b99-7bd0-4b6a-88e9-1d5c47117d06)
+
 ## Описание зависимостей
 
 1. **Python 3.9+**
@@ -244,8 +246,21 @@ pub extern "C" fn kill_process(pid: u32) -> i32
 	- `-2` — ошибка завершения процесса
 #### **Назначение**
 Принудительно завершает процесс по его идентификатору (PID) через Windows API.
+![photo_5453970955790577686_y](https://github.com/user-attachments/assets/0c8ea90d-7cc1-497a-9109-76451b868d0a)
 
-**№18 `get_services_info_array()`**
+**№18 `get_proc_path()`**
+```
+pub extern "C" fn get_proc_path(pid: u32) -> *const c_cha
+```
+#### **Аргументы**
+- `pid`: Идентификатор процесса (32-битное беззнаковое целое)
+#### **Возвращает**: 
+с-строку с путем
+ #### **Назначение**
+Получает путь до файла исполнение процесса.
+![photo_5458474555417949578_y](https://github.com/user-attachments/assets/7d323340-bc91-4503-8c45-34ee57ef2e1d)
+
+**№19 `get_services_info_array()`**
 ```
 #[cfg(target_os = "windows")]
 pub extern "C" fn get_services_info_array() -> ServiceInfoArray
