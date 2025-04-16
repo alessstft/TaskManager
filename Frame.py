@@ -385,7 +385,7 @@ if __name__ == "__main__":
     
     # Пытаемся загрузить иконку
     try:
-        icon = tk.PhotoImage(file='\TaskManager-Boba\icon.png')
+        icon = tk.PhotoImage(file='/TaskManager-Boba/icon.png')
         root.iconphoto(True, icon)
     except:
         pass  # Просто пропускаем, если иконка не найдена
