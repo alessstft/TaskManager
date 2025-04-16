@@ -50,7 +50,7 @@ class PerformanceTab(tk.Frame):
                 text=name,
                 bg='#2d2d2d',
                 fg='white',
-                activeforeground='white',
+                activeforeground='black',
                 borderwidth=5, 
                 relief='flat',
                 command=lambda m=metric: self.switch_metric(m)
