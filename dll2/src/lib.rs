@@ -6,105 +6,130 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 use lazy_static::lazy_static;
 use local_ipaddress;
-use std::process::Command;
-use serde::Deserialize;
 use sysinfo::NetworkExt;
 
-// Глобальный кэш объекта System
+// Для NVML
+use nvml_wrapper::NVML;
+use nvml_wrapper::enum_wrappers::device::TemperatureSensor;
+
+// ========================
+//  Структуры для NVIDIA
+// ========================
+
+#[repr(C)]
+pub struct NvidiaGpuInfo {
+    pub index: u32,           // индекс устройства
+    pub name: *mut c_char,    // строка с названием
+    pub temperature: u32,     // температура в градусах Цельсия
+    pub memory_total: u64,    // общий объём памяти (МБ)
+    pub memory_used: u64,     // использовано памяти (МБ)
+    pub memory_free: u64,     // свободно памяти (МБ)
+}
+
+#[repr(C)]
+pub struct NvidiaGpuInfoArray {
+    pub data: *mut NvidiaGpuInfo,
+    pub len: usize,
+}
+
+#[no_mangle]
+pub extern "C" fn get_nvidia_gpu_info_array() -> NvidiaGpuInfoArray {
+    // Пытаемся инициализировать NVML
+    let nvml = match NVML::init() {
+        Ok(n) => n,
+        Err(_e) => {
+            return NvidiaGpuInfoArray {
+                data: std::ptr::null_mut(),
+                len: 0,
+            }
+        }
+    };
+
+    // Получаем количество NVIDIA GPU
+    let device_count = match nvml.device_count() {
+        Ok(cnt) => cnt,
+        Err(_e) => {
+            return NvidiaGpuInfoArray {
+                data: std::ptr::null_mut(),
+                len: 0,
+            }
+        }
+    };
+
+    let mut vec: Vec<NvidiaGpuInfo> = Vec::with_capacity(device_count as usize);
+    for i in 0..device_count {
+        let device = match nvml.device_by_index(i) {
+            Ok(d) => d,
+            Err(_) => continue, // пропускаем устройство при ошибке
+        };
+
+        let name = match device.name() {
+            Ok(n) => n,
+            Err(_) => "Unknown".to_string(),
+        };
+
+        let temperature = match device.temperature(TemperatureSensor::Gpu) {
+            Ok(t) => t,
+            Err(_) => 0,
+        };
+
+        let memory_info = match device.memory_info() {
+            Ok(mi) => mi,
+            Err(_) => continue,
+        };
+
+        vec.push(NvidiaGpuInfo {
+            index: i,
+            name: CString::new(name).unwrap().into_raw(),
+            temperature,
+            // преобразуем байты в мегабайты (деление на 1024*1024)
+            memory_total: memory_info.total / 1024 / 1024,
+            memory_used: memory_info.used / 1024 / 1024,
+            memory_free: memory_info.free / 1024 / 1024,
+        });
+    }
+
+    let len = vec.len();
+    let data_ptr = vec.as_mut_ptr();
+    std::mem::forget(vec);
+    NvidiaGpuInfoArray { data: data_ptr, len }
+}
+
+#[no_mangle]
+pub extern "C" fn free_nvidia_gpu_info_array(array: NvidiaGpuInfoArray) {
+    if array.data.is_null() { return; }
+    unsafe {
+        let vec = Vec::from_raw_parts(array.data, array.len, array.len);
+        for item in vec {
+            if !item.name.is_null() {
+                let _ = CString::from_raw(item.name);
+            }
+        }
+    }
+}
+
+// ========================
+//  Системная информация
+// ========================
+
 lazy_static! {
     static ref SYS: Mutex<System> = Mutex::new(System::new());
 }
 
-// ===================== СТРУКТУРЫ ДЛЯ СТАТИЧЕСКОЙ ИНФОРМАЦИИ =====================
+// ---------- CPU ----------
+
 #[repr(C)]
 pub struct CpuStaticInfo {
     pub brand: *mut c_char,  // наименование ЦПУ
     pub usage: f32,          // загрузка (в %)
     pub frequency: f64,      // частота (ГГц)
     pub core_count: usize,   // количество ядер
-    pub work_time: i64,      // время работы
+    pub work_time: i64,      // время работы (секунд)
     pub process: i64,        // количество процессов
 }
 
-#[cfg(target_os = "windows")]
-#[derive(Deserialize, Debug)]
-struct Win32PhysicalMemory {
-    #[serde(rename = "Speed")]
-    speed: u32,
-    #[serde(rename = "MemoryType")]
-    memory_type: Option<u32>,
-    #[serde(rename = "SMBIOSMemoryType")]
-    smbios_memory_type: Option<u32>,
-}
-
-#[repr(C)]
-pub struct MemoryStaticInfo {
-    pub total: u64,         // общий объём (КБ)
-    pub used: u64,          // используемая память (КБ)
-    pub available: u64,     // доступная память (КБ)
-    pub speed: u64,         // скорость памяти (МГц)
-    pub format: *mut c_char,// формат памяти (например, "DDR4")
-}
-
-#[repr(C)]
-pub struct MemoryInfo {
-    pub speed: u32,
-    pub memory_format: *mut c_char,
-}
-
-#[repr(C)]
-pub struct MemoryInfoArray {
-    pub data: *mut MemoryInfo,
-    pub len: usize,
-}
-
-#[repr(C)]
-pub struct DiskStaticInfo {
-    pub name: *mut c_char,     // имя диска
-    pub total_space: u64,      // общий объём (в байтах)
-    pub available_space: u64,  // свободное место (в байтах)
-}
-
-#[repr(C)]
-pub struct DiskStaticInfoArray {
-    pub data: *mut DiskStaticInfo,
-    pub len: usize,
-}
-
-#[repr(C)]
-pub struct NetworksStaticInfo {
-    pub name: *mut c_char,
-    pub ipv4: *mut c_char,
-    pub send: u64,
-    pub recive: u64,
-}
-
-#[repr(C)]
-pub struct NetworksStaticInfoArray {
-    pub data: *mut NetworksStaticInfo,
-    pub len: usize,
-}
-
-#[cfg(target_os = "windows")]
-#[repr(C)]
-pub struct ServiceInfo {
-    pub process_id: u32,    // Идентификатор процесса службы
-    pub name: *mut c_char,  // Имя службы
-    pub status: *mut c_char,// Статус службы
-}
-
-#[cfg(target_os = "windows")]
-#[repr(C)]
-pub struct ServiceInfoArray {
-    pub data: *mut ServiceInfo,
-    pub len: usize,
-}
-
-// ===================== ФУНКЦИИ ДЛЯ СТАТИЧЕСКОЙ ИНФОРМАЦИИ =====================
-
 #[no_mangle]
 pub extern "C" fn get_cpu_static_info() -> *mut CpuStaticInfo {
-    // Используем глобальный объект и обновляем только CPU и процессы
     let mut sys = SYS.lock().unwrap();
     sys.refresh_cpu();
     sys.refresh_processes();
@@ -132,9 +157,9 @@ pub extern "C" fn get_cpu_static_info() -> *mut CpuStaticInfo {
         brand: CString::new(brand).unwrap().into_raw(),
         usage,
         frequency,
-        process,
         core_count,
         work_time,
+        process,
     };
     Box::into_raw(Box::new(info))
 }
@@ -148,6 +173,82 @@ pub extern "C" fn free_cpu_static_info(info: *mut CpuStaticInfo) {
             let _ = CString::from_raw(info_box.brand);
         }
     }
+}
+
+// ---------- Memory ----------
+
+#[cfg(target_os = "windows")]
+#[derive(serde::Deserialize, Debug)]
+struct Win32PhysicalMemory {
+    #[serde(rename = "Speed")]
+    speed: u32,
+    #[serde(rename = "MemoryType")]
+    memory_type: Option<u32>,
+    #[serde(rename = "SMBIOSMemoryType")]
+    smbios_memory_type: Option<u32>,
+}
+
+#[repr(C)]
+pub struct MemoryStaticInfo {
+    pub total: u64,         // общий объём (ГБ)
+    pub used: u64,          // используемая память (ГБ)
+    pub available: u64,     // доступная память (ГБ)
+    pub speed: u64,         // скорость памяти (МГц)
+    pub format: *mut c_char,// формат памяти (например, "DDR4")
+}
+
+#[repr(C)]
+pub struct MemoryInfo {
+    pub speed: u32,
+    pub memory_format: *mut c_char,
+}
+
+#[repr(C)]
+pub struct MemoryInfoArray {
+    pub data: *mut MemoryInfo,
+    pub len: usize,
+}
+
+#[cfg(target_os = "windows")]
+fn get_modern_memory_format(smbios: Option<u32>, memory_type: Option<u32>) -> &'static str {
+    if let Some(smbios_val) = smbios {
+        if smbios_val != 0 {
+            match smbios_val {
+                20 => "DDR",
+                21 => "DDR2",
+                22 => "DDR2 FB-DIMM",
+                24 => "DDR3",
+                26 => "DDR4",
+                34 => "DDR5",
+                _  => "Unknown",
+            }
+        } else if let Some(mem_val) = memory_type {
+            match mem_val {
+                20 => "DDR",
+                21 => "DDR2",
+                22 => "DDR2 FB-DIMM",
+                24 => "DDR3",
+                _  => "Unknown",
+            }
+        } else {
+            "Unknown"
+        }
+    } else if let Some(mem_val) = memory_type {
+        match mem_val {
+            20 => "DDR",
+            21 => "DDR2",
+            22 => "DDR2 FB-DIMM",
+            24 => "DDR3",
+            _  => "Unknown",
+        }
+    } else {
+        "Unknown"
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn get_modern_memory_format(_: Option<u32>, _: Option<u32>) -> &'static str {
+    "Unknown"
 }
 
 #[cfg(target_os = "windows")]
@@ -208,67 +309,40 @@ pub extern "C" fn free_memory_info_array(array: MemoryInfoArray) {
     }
 }
 
-fn get_modern_memory_format(smbios: Option<u32>, memory_type: Option<u32>) -> &'static str {
-    if let Some(smbios_val) = smbios {
-        if smbios_val != 0 {
-            match smbios_val {
-                20 => "DDR",
-                21 => "DDR2",
-                22 => "DDR2 FB-DIMM",
-                24 => "DDR3",
-                26 => "DDR4",
-                34 => "DDR5",
-                _  => "Unknown",
-            }
-        } else {
-            if let Some(mem_val) = memory_type {
-                match mem_val {
-                    20 => "DDR",
-                    21 => "DDR2",
-                    22 => "DDR2 FB-DIMM",
-                    24 => "DDR3",
-                    _  => "Unknown",
-                }
-            } else {
-                "Unknown"
-            }
-        }
-    } else {
-        if let Some(mem_val) = memory_type {
-            match mem_val {
-                20 => "DDR",
-                21 => "DDR2",
-                22 => "DDR2 FB-DIMM",
-                24 => "DDR3",
-                _  => "Unknown",
-            }
-        } else {
-            "Unknown"
-        }
-    }
-}
-
 #[no_mangle]
 pub extern "C" fn get_memory_static_info() -> MemoryStaticInfo {
-    // Выбираем обновление только для памяти
     let mut sys = SYS.lock().unwrap();
     sys.refresh_memory();
-    // Пример значений: скорость 2400 МГц и формат DDR4 (используем smbios = Some(26))
+    // Пример: скорость 2400 МГц, формат DDR4
     let mem_speed = 2400;
     let mem_format_str = get_modern_memory_format(Some(26), None);
     let mem_format = CString::new(mem_format_str).unwrap();
     MemoryStaticInfo {
-        total: sys.total_memory() / (1024 * 1024 * 1024),      // перевод из КБ в ГБ
-        used: sys.used_memory() / (1024 * 1024 * 1024),          // перевод из КБ в ГБ
-        available: sys.available_memory() / (1024 * 1024 * 1024),// перевод из КБ в ГБ
+        total: sys.total_memory() / (1024 * 1024 * 1024),
+        used: sys.used_memory() / (1024 * 1024 * 1024),
+        available: sys.available_memory() / (1024 * 1024 * 1024),
         speed: mem_speed,
         format: mem_format.into_raw(),
     }
 }
 
+// ---------- Диски ----------
+
+#[repr(C)]
+pub struct DiskStaticInfo {
+    pub name: *mut c_char,     // имя диска
+    pub total_space: u64,      // общий объём (ГБ)
+    pub available_space: u64,  // свободное место (ГБ)
+}
+
+#[repr(C)]
+pub struct DiskStaticInfoArray {
+    pub data: *mut DiskStaticInfo,
+    pub len: usize,
+}
+
 #[no_mangle]
 pub extern "C" fn get_disk_static_info_array() -> DiskStaticInfoArray {
-    // Обновляем только дисковую подсистему
     let mut sys = SYS.lock().unwrap();
     sys.refresh_disks();
     let disks = sys.disks();
@@ -278,8 +352,8 @@ pub extern "C" fn get_disk_static_info_array() -> DiskStaticInfoArray {
         let name = disk.name().to_string_lossy().to_string();
         vec.push(DiskStaticInfo {
             name: CString::new(name).unwrap().into_raw(),
-            total_space: disk.total_space() / (1024 * 1024 * 1024),      // перевод из байт в ГБ
-            available_space: disk.available_space() / (1024 * 1024 * 1024) // перевод из байт в ГБ
+            total_space: disk.total_space() / (1024 * 1024 * 1024),
+            available_space: disk.available_space() / (1024 * 1024 * 1024),
         });
     }
     let data_ptr = vec.as_mut_ptr();
@@ -300,15 +374,29 @@ pub extern "C" fn free_disk_static_info_array(array: DiskStaticInfoArray) {
     }
 }
 
+// ---------- Сеть ----------
+
+#[repr(C)]
+pub struct NetworksStaticInfo {
+    pub name: *mut c_char,
+    pub ipv4: *mut c_char,
+    pub send: u64,
+    pub recive: u64,
+}
+
+#[repr(C)]
+pub struct NetworksStaticInfoArray {
+    pub data: *mut NetworksStaticInfo,
+    pub len: usize,
+}
+
 #[no_mangle]
 pub extern "C" fn get_networks_static_info_array() -> NetworksStaticInfoArray {
-    // Обновляем только сетевую подсистему
     let mut sys = SYS.lock().unwrap();
     sys.refresh_networks();
     let networks = sys.networks();
     let len = networks.iter().count();
     let mut vec: Vec<NetworksStaticInfo> = Vec::with_capacity(len);
-    // Получаем локальный IP-адрес (используем local_ipaddress = "0.1.2")
     let local_ip = local_ipaddress::get().unwrap_or("0.0.0.0".to_string());
     for (iface_name, network) in networks {
         let name = iface_name.to_string();
@@ -342,7 +430,7 @@ pub extern "C" fn free_networks_static_info_array(array: NetworksStaticInfoArray
     }
 }
 
-// ===================== ПРОЦЕССНЫЙ МОДУЛЬ =====================
+// ---------- Процессы ----------
 
 #[repr(C)]
 pub struct ProcessInfo {
@@ -383,17 +471,14 @@ lazy_static! {
 fn create_process_info_internal(pid: &sysinfo::Pid, process: &sysinfo::Process) -> ProcessInfoInternal {
     let disk_usage = process.disk_usage();
     let total_cores = SYS.lock().unwrap().cpus().len() as f32;
-
-    // Внутри цикла для каждого процесса:
     ProcessInfoInternal {
         pid: pid.to_string(),
         name: process.name().to_string(),
-        cpu_usage: process.cpu_usage() / total_cores,  // нормализованное значение
+        cpu_usage: process.cpu_usage() / total_cores,
         memory_mb: process.memory() as f64 / (1024.0 * 1024.0),
         read_kb: disk_usage.total_read_bytes as f64 / 1024.0,
         written_kb: disk_usage.total_written_bytes as f64 / 1024.0,
     }
-
 }
 
 fn process_collector_thread(running: Arc<AtomicBool>, info: Arc<Mutex<Vec<ProcessInfoInternal>>>) {
@@ -401,7 +486,6 @@ fn process_collector_thread(running: Arc<AtomicBool>, info: Arc<Mutex<Vec<Proces
     while running.load(Ordering::Relaxed) {
         sys.refresh_processes();
         sys.refresh_cpu();
-        
         let mut processes_vec = Vec::new();
         for (pid, process) in sys.processes() {
             processes_vec.push(create_process_info_internal(pid, process));
@@ -497,6 +581,23 @@ pub extern "C" fn free_process_info_array(array: ProcessInfoArray) {
     }
 }
 
+// ---------- Службы (Windows) ----------
+
+#[cfg(target_os = "windows")]
+#[repr(C)]
+pub struct ServiceInfo {
+    pub process_id: u32,    // идентификатор процесса службы
+    pub name: *mut c_char,  // имя службы
+    pub status: *mut c_char,// статус службы
+}
+
+#[cfg(target_os = "windows")]
+#[repr(C)]
+pub struct ServiceInfoArray {
+    pub data: *mut ServiceInfo,
+    pub len: usize,
+}
+
 #[cfg(target_os = "windows")]
 #[no_mangle]
 pub extern "C" fn get_services_info_array() -> ServiceInfoArray {
@@ -575,7 +676,16 @@ pub extern "C" fn free_services_info_array(array: ServiceInfoArray) {
     }
 }
 
-// ===================== ФУНКЦИЯ ДЛЯ ПОЛУЧЕНИЯ ПУТИ К ПРОЦЕССУ НА WINDOWS =====================
+// ---------- Вспомогательные функции для работы со строками ----------
+
+#[no_mangle]
+pub extern "C" fn free_string(s: *mut c_char) {
+    if s.is_null() { return; }
+    unsafe { let _ = CString::from_raw(s); }
+}
+
+// ---------- Функции для получения пути к процессу и завершения процесса (Windows) ----------
+
 #[cfg(target_os = "windows")]
 #[no_mangle]
 pub extern "C" fn get_proc_path(pid: u32) -> *const c_char {
@@ -588,57 +698,40 @@ pub extern "C" fn get_proc_path(pid: u32) -> *const c_char {
     use std::ffi::OsString;
     
     let mut filename: [u16; 260] = [0; 260];
-
     let process_handle = unsafe {
         OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, 0, pid)
     };
-
     if process_handle.is_null() {
         return ptr::null();
     }
-
     let result = unsafe {
         GetModuleFileNameExW(process_handle, ptr::null_mut(), filename.as_mut_ptr(), filename.len() as u32)
     };
-
     unsafe { CloseHandle(process_handle) };
-
     if result == 0 {
         return ptr::null();
     }
-
-    // Преобразуем полученный wide-строковый буфер в CString
     let os_string = OsString::from_wide(&filename[..result as usize]);
     let string = os_string.to_string_lossy().into_owned();
     CString::new(string).unwrap().into_raw()
 }
 
-// Добавьте этот код (например, в конце файла)
 #[cfg(target_os = "windows")]
 #[no_mangle]
 pub extern "C" fn kill_process(pid: u32) -> i32 {
     use winapi::um::processthreadsapi::{OpenProcess, TerminateProcess};
     use winapi::um::winnt::PROCESS_TERMINATE;
     use winapi::um::handleapi::CloseHandle;
-
     unsafe {
-        // Открываем процесс с правом завершения
         let handle = OpenProcess(PROCESS_TERMINATE, 0, pid);
         if handle.is_null() {
-            return -1; // Не удалось открыть процесс
+            return -1;
         }
-        // Завершаем процесс, передаём код завершения (например, 1)
         let result = TerminateProcess(handle, 1);
         CloseHandle(handle);
         if result == 0 {
-            return -2; // Завершение не удалось
+            return -2;
         }
-        0 // Успех
+        0
     }
-}
-
-#[no_mangle]
-pub extern "C" fn free_string(s: *mut c_char) {
-    if s.is_null() { return; }
-    unsafe { let _ = CString::from_raw(s); }
 }
