@@ -3,8 +3,9 @@ from tkinter import ttk, Canvas, messagebox
 from collections import deque
 import threading
 import time
-import psutil
 from system_monitor import SystemMonitor
+import ctypes
+import os
 
 class PerformanceTab(tk.Frame):
     def __init__(self, parent=None):
@@ -49,7 +50,6 @@ class PerformanceTab(tk.Frame):
                 text=name,
                 bg='#2d2d2d',
                 fg='white',
-
                 activeforeground='white',
                 borderwidth=5, 
                 relief='flat',
@@ -59,7 +59,7 @@ class PerformanceTab(tk.Frame):
             btn.bind("<Enter>", lambda e, b=btn, c=color: b.config(bg=c))
             btn.bind("<Leave>", lambda e, b=btn: b.config(bg='#2d2d2d'))
             btn.bind("<Button-1>", lambda e, b=btn, c=color: b.config(bg=c))
-            btn.bind("<Button-1>", lambda e, b=btn, c=color: b.config(bg=self.darken_color(c)))
+            btn.bind("<Button-1>", lambda e, b=btn, c=color: b.config(bg=self.dark_color(c)))
             btn.grid(row=i, column=0, sticky='ew', padx=2, pady=2, ipadx=50, ipady=5)
         
         # Правая панель с графиком
@@ -173,6 +173,25 @@ class PerformanceTab(tk.Frame):
         self.info_labels["Использование"].config(text=f"{cpu_percent:.1f}%")
         self.info_labels["Процессы"].config(text=str(system_info.get('process_count', 0)))
         self.info_labels["Потоки"].config(text=str(system_info.get('thread_count', 0)))
+        
+        # Форматируем время работы
+        uptime = system_info.get('uptime', 0)
+        hours = int(uptime // 3600)
+        minutes = int((uptime % 3600) // 60)
+        seconds = int(uptime % 60)
+        self.info_labels["Время работы"].config(text=f"{hours}:{minutes:02d}:{seconds:02d}")
+
+    def dark_color(self, color):
+        """Darken a hex color by 20%"""
+        r = int(color[1:3], 16)
+        g = int(color[3:5], 16)
+        b = int(color[5:7], 16)
+        
+        r = max(0, r - 40)
+        g = max(0, g - 40)
+        b = max(0, b - 40)
+        
+        return f'#{r:02x}{g:02x}{b:02x}'
 
 class TaskManager:
     def __init__(self, root):
@@ -290,19 +309,29 @@ class TaskManager:
                 self._update_services()
 
     def _update_performance(self):
+        # Collect all data using system_monitor DLL
+        cpu_info = self.system_monitor._get_cpu_info()
+        memory_info = self.system_monitor._get_memory_info()
+        disk_info = self.system_monitor.get_disk_info()
+        
+        # Format the data for the performance tab
         system_info = {
-            'cpu_percent': psutil.cpu_percent(),
+            'cpu_percent': cpu_info['usage'],
             'memory': {
-                'total': psutil.virtual_memory().total,
-                'available': psutil.virtual_memory().available
+                'total': memory_info['total'] / (1024 * 1024 * 1024),  # Convert to GB
+                'available': memory_info['available'] / (1024 * 1024 * 1024)  # Convert to GB
             },
-            'disk_usage': psutil.disk_usage('/').percent,
-            'network_usage': 0,  # Заглушка
-            'process_count': len(psutil.pids()),
-            'thread_count': sum(p.num_threads() for p in psutil.process_iter()),
-            'uptime': time.time() - psutil.boot_time()
+            'disk_usage': disk_info[0]['percent'] if disk_info and 'percent' in disk_info[0] else 
+                          (1 - disk_info[0]['available_space'] / disk_info[0]['total_space']) * 100 if disk_info else 0,
+            'network_usage': 0,  # Will be updated with proper calculation
+            'process_count': cpu_info['process_count'],
+            'thread_count': 0,  # This information might not be directly available from the DLL
+            'uptime': cpu_info['work_time']
         }
+        
+        # Update the performance tab with the collected data
         self.performance_tab.update_data(system_info)
+
     def _update_processes(self, processes):
         if self._process_selected:
             return
