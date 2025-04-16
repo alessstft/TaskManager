@@ -72,7 +72,9 @@ class PerformanceTab(tk.Frame):
             ("Использование", "0%"),
             ("Скорость", "0.00"),
             ("Процессы", "0"),
-            ("Потоки", "0")
+            ("Потоки", "0"),
+            ("Дескрипторы", "0"),
+            ("Время работы", "0:00:00")
         ]
         
         for i, (name, value) in enumerate(labels):
@@ -112,7 +114,7 @@ class PerformanceTab(tk.Frame):
             
         with self._data_lock:
             metrics_data = self.calculate_metrics(system_info)
-            for metric, value in metrics_data.items():
+            for metric, value in metrics_data.items():   
                 self.values[metric].append(value)
             
             if self.current_metric in metrics_data:
@@ -295,7 +297,6 @@ class TaskManager:
             'uptime': time.time() - psutil.boot_time()
         }
         self.performance_tab.update_data(system_info)
-
     def _update_processes(self, processes):
         if self._process_selected:
             return
@@ -384,7 +385,7 @@ if __name__ == "__main__":
     
     # Пытаемся загрузить иконку
     try:
-        icon = tk.PhotoImage(file='TaskManager-Boba/icon.png')
+        icon = tk.PhotoImage(file='\TaskManager-Boba\icon.png')
         root.iconphoto(True, icon)
     except:
         pass  # Просто пропускаем, если иконка не найдена
