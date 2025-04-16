@@ -8,8 +8,9 @@ import ctypes
 import os
 
 class PerformanceTab(tk.Frame):
-    def __init__(self, parent=None):
+    def __init__(self, parent, system_monitor=None):
         super().__init__(parent)
+        self.system_monitor = system_monitor  
         self._data_lock = threading.Lock()
         self._update_lock = threading.Lock()
         self.is_dark_theme = parent.is_dark_theme if hasattr(parent, 'is_dark_theme') else False
@@ -62,16 +63,25 @@ class PerformanceTab(tk.Frame):
             btn.bind("<Button-1>", lambda e, b=btn, c=color: b.config(bg=self.dark_color(c)))
             btn.grid(row=i, column=0, sticky='ew', padx=2, pady=2, ipadx=50, ipady=5)
         
-        # Правая панель с графиком
+        # Правая панель с графиком и деталями
         right_panel = tk.Frame(self, bg='#1e1e1e')
         right_panel.grid(row=0, column=1, sticky='nsew')
         
-        self.canvas = tk.Canvas(right_panel, bg='#1e1e1e', highlightthickness=0)
-        self.canvas.pack(fill='both', expand=True, padx=10, pady=10)
+        # График
+        self.chart_title = tk.Label(right_panel, text="ЦП", bg='#1e1e1e', fg='white', 
+                                   font=('Arial', 28, 'bold'))
+        self.chart_title.pack(anchor='w', padx=10, pady=(10, 0))
+        
+        self.canvas = tk.Canvas(right_panel, bg='#1e1e1e', highlightthickness=0, height=250)
+        self.canvas.pack(fill='x', expand=False, padx=10, pady=10)
         
         # Информационные метки
         info_frame = tk.Frame(right_panel, bg='#1e1e1e')
         info_frame.pack(fill='x', padx=10, pady=(0, 10))
+        
+        # Создаем контейнер для меток
+        self.info_labels_container = tk.Frame(info_frame, bg='#1e1e1e')
+        self.info_labels_container.pack(fill='x', expand=True)
         
         self.info_labels = {}
         labels = [
@@ -79,21 +89,29 @@ class PerformanceTab(tk.Frame):
             ("Скорость", "0.00"),
             ("Процессы", "0"),
             ("Потоки", "0"),
-            ("Дескрипторы", "0"),
             ("Время работы", "0:00:00")
         ]
         
         for i, (name, value) in enumerate(labels):
-            frame = tk.Frame(info_frame, bg='#1e1e1e')
+            frame = tk.Frame(self.info_labels_container, bg='#1e1e1e')
             frame.grid(row=0, column=i, padx=15)
             
             tk.Label(frame, text=name, bg='#1e1e1e', fg='#aaaaaa').pack()
             self.info_labels[name] = tk.Label(frame, text=value, bg='#1e1e1e', fg='white')
             self.info_labels[name].pack()
+
+        # Создаем фрейм для деталей под графиком
+        self.details_frame = tk.Frame(right_panel, bg='#1e1e1e', highlightbackground="#3c3c3c", highlightthickness=1)
+        self.details_frame.pack(fill='both', expand=True, padx=10, pady=10)
         
-        self.chart_title = tk.Label(right_panel, text="ЦП", bg='#1e1e1e', fg='white', 
-                                  font=('Arial', 28, 'bold'))
-        self.chart_title.pack(anchor='w', padx=10, pady=(10, 0))
+        # Заголовок деталей
+        self.details_header = tk.Label(self.details_frame, font=("Arial", 12, "bold"), 
+                                     bg="#1e1e1e", fg="white")
+        self.details_header.pack(anchor="w", padx=10, pady=(15, 1))
+        
+        # Контейнер для деталей
+        self.details_container = tk.Frame(self.details_frame, bg='#1e1e1e')
+        self.details_container.pack(fill="both", expand=True, padx=5)
         
     def switch_metric(self, metric):
         self.current_metric = metric
@@ -113,12 +131,27 @@ class PerformanceTab(tk.Frame):
         self._current_color = colors[metric]
         self.update_chart()
         
+        # Обновляем информацию в зависимости от выбранной метрики
+        if metric == 'memory':
+            self._update_memory_details(self._last_system_info if hasattr(self, '_last_system_info') else {})
+        elif metric == 'disk':
+            self._update_disk_details(self._last_system_info if hasattr(self, '_last_system_info') else {})
+        elif metric == 'network':
+            self._update_ethernet_details(self._last_system_info if hasattr(self, '_last_system_info') else {})
+        else:
+            # Скрываем детали для CPU
+            if hasattr(self, 'details_frame'):
+                self.details_frame.place_forget()
+        
     def update_data(self, system_info):
         current_time = time.time()
         if current_time - self._last_update < self._update_interval:
             return
             
         with self._data_lock:
+            # Сохраняем последние данные системы
+            self._last_system_info = system_info
+            
             metrics_data = self.calculate_metrics(system_info)
             for metric, value in metrics_data.items():   
                 self.values[metric].append(value)
@@ -180,9 +213,117 @@ class PerformanceTab(tk.Frame):
         minutes = int((uptime % 3600) // 60)
         seconds = int(uptime % 60)
         self.info_labels["Время работы"].config(text=f"{hours}:{minutes:02d}:{seconds:02d}")
+        
+        # Если текущая метрика - память, показываем детальную информацию
+        if self.current_metric == 'memory':
+            self._update_memory_details(system_info)
+        else:
+            # Если не память - скрываем детали
+            if hasattr(self, 'details_frame'):
+                self.details_frame.place_forget()
+    
+    def _update_memory_details(self, system_info):
+        """Обновляет панель с детальной информацией о памяти"""
+        if not hasattr(self, 'system_monitor') or self.system_monitor is None:
+            return  
+    
+        memory_info = self.system_monitor._get_memory_info()
+        total_gb = memory_info['total'] / (1024**3)
+        used_gb = memory_info['used'] / (1024**3)
+        available_gb = memory_info['available'] / (1024**3)
+        
+        # Обновляем метки с актуальными данными
+        labels = [
+            ("Используется (сжатая)", f"{used_gb:.1f} ГБ (188 МБ)"),
+            ("Доступно", f"{available_gb:.1f} ГБ"),
+            ("Скорость:", f"{memory_info['speed']} МГц"),
+            ("Выделено", f"{used_gb:.1f}/{total_gb:.1f} ГБ"),
+            ("Кэшировано", "1,1 ГБ"),
+            ("Использовано гнезд:", "2 из 4"),
+            ("Выгружаемый пул", "315 МБ"),
+            ("Невыгружаемый пул", "184 МБ"),
+            ("Форм-фактор:", "DIMM"),
+            ("Зарезервировано аппаратно:", "95,1 МБ")
+        ]
+        
+        self._update_details("Использование памяти", labels)
+
+    def _update_disk_details(self, system_info):
+        if not hasattr(self, 'system_monitor') or self.system_monitor is None:
+            return  # Прекращаем выполнение, если system_monitor не задан
+
+        disk_info = self.system_monitor.get_disk_info()
+        if not disk_info:  # Проверяем, что данные есть
+            return
+
+        disk_info = disk_info[0]  # Берем первый диск
+        total_gb = disk_info['total_space'] / (1024**3)
+        available_gb = disk_info['available_space'] / (1024**3)
+        used_gb = total_gb - available_gb
+        
+        labels = [
+            ("Активное время", "0%"),
+            ("Средняя скорость отклика", "0 мс"),
+            ("Скорость записи", "0 КБ/с"),
+            ("Скорость чтения", "0 КБ/с"),
+            ("Активное время записи", "0%"),
+            ("Активное время чтения", "0%"),
+            ("Размер раздела", f"{total_gb:.1f} ГБ"),
+            ("Свободно места", f"{available_gb:.1f} ГБ"),
+            ("Используется места", f"{used_gb:.1f} ГБ"),
+            ("Тип раздела", "NTFS")
+        ]
+        
+        self._update_details(f"Диск ({disk_info['name']})", labels)
+
+    def _update_ethernet_details(self, system_info):
+        if not hasattr(self, 'system_monitor') or self.system_monitor is None:
+            return  # Прекращаем выполнение, если system_monitor не задан
+
+        network_info = self.system_monitor.get_network_info()
+        if not network_info:  # Проверяем, что данные есть
+            network_info = []
+
+            labels = [
+                ("Отправлено", f"{net['send_speed']/1024:.1f} КБ/с"),
+                ("Получено", f"{net['recv_speed']/1024:.1f} КБ/с"),
+                ("Скорость соединения", "1.0 Гбит/с"),
+                ("Состояние", "Подключено"),
+                ("IPv4-адрес", net['ipv4']),
+                ("Тип адаптера", "Ethernet"),
+                ("DNS-сервер", "8.8.8.8"),
+                ("Шлюз по умолчанию", "192.168.1.1"),
+                ("Маска подсети", "255.255.255.0"),
+                ("DHCP", "Включен")
+            ]
+        else:
+            labels = [("Состояние", "Не подключено")]
+            
+        self._update_details("Ethernet", labels)
+
+    def _update_details(self, header_text, labels):
+        """Обновляет содержимое панели деталей"""
+        # Обновляем заголовок
+        self.details_header.config(text=header_text)
+        
+        # Очищаем старые метки
+        for widget in self.details_container.winfo_children():
+            widget.destroy()
+        
+        # Создаем новые метки
+        for i, (name, value) in enumerate(labels):
+            row = i // 2
+            col = i % 2
+            frame = tk.Frame(self.details_container, bg='#1e1e1e')
+            frame.grid(row=row, column=col, sticky='w', padx=10, pady=5)
+            
+            tk.Label(frame, text=name, bg='#1e1e1e', fg='#aaaaaa', anchor='w', width=25).pack(side='top', fill='x')
+            tk.Label(frame, text=value, bg='#1e1e1e', fg='white', anchor='w', width=25, 
+                    font=("Arial", 10, "bold")).pack(side='top', fill='x')
+        
+        self.details_frame.lift()
 
     def dark_color(self, color):
-        """Darken a hex color by 20%"""
         r = int(color[1:3], 16)
         g = int(color[3:5], 16)
         b = int(color[5:7], 16)
@@ -228,16 +369,16 @@ class TaskManager:
         self.notebook = ttk.Notebook(self.root)
         self.notebook.pack(fill=tk.BOTH, expand=True)
 
-        # Вкладка процессов
+    # Вкладка процессов
         self.processes_frame = tk.Frame(self.notebook, bg="#2d2d2d")
         self.notebook.add(self.processes_frame, text="Процессы")
         self._setup_processes_tab()
 
-        # Вкладка производительности
-        self.performance_tab = PerformanceTab(self.notebook)
+    # Вкладка производительности (передаем system_monitor)
+        self.performance_tab = PerformanceTab(self.notebook, self.system_monitor)
         self.notebook.add(self.performance_tab, text="Производительность")
 
-        # Вкладка служб
+    # Вкладка служб
         self.services_frame = tk.Frame(self.notebook, bg="#2d2d2d")
         self.notebook.add(self.services_frame, text="Службы")
         self._setup_services_tab()
@@ -256,7 +397,7 @@ class TaskManager:
 
         btn_frame = tk.Frame(self.processes_frame, bg="#2d2d2d")
         btn_frame.pack(fill=tk.X, pady=10)
-        
+
         self.end_task_btn = tk.Button(
             btn_frame,
             text="Завершить задачу",
@@ -329,7 +470,7 @@ class TaskManager:
             'uptime': cpu_info['work_time']
         }
         
-        # Update the performance tab with the collected data
+
         self.performance_tab.update_data(system_info)
 
     def _update_processes(self, processes):
@@ -417,12 +558,10 @@ class TaskManager:
 if __name__ == "__main__":
     root = tk.Tk()
     app = TaskManager(root)
-    
-    # Пытаемся загрузить иконку
     try:
-        icon = tk.PhotoImage(file='/TaskManager-Boba/icon.png')
+        icon = tk.PhotoImage(file='C:/Users/studentcoll/Desktop/TaskManager-Boba/icon.png')
         root.iconphoto(True, icon)
     except:
-        pass  # Просто пропускаем, если иконка не найдена
+        pass  
     
     root.mainloop()
