@@ -49,12 +49,18 @@ class PerformanceTab(tk.Frame):
                 text=name,
                 bg='#2d2d2d',
                 fg='white',
-                activebackground='#3d3d3d',
+
                 activeforeground='white',
+                borderwidth=5, 
                 relief='flat',
                 command=lambda m=metric: self.switch_metric(m)
             )
-            btn.grid(row=i, column=0, sticky='ew', padx=5, pady=5)
+
+            btn.bind("<Enter>", lambda e, b=btn, c=color: b.config(bg=c))
+            btn.bind("<Leave>", lambda e, b=btn: b.config(bg='#2d2d2d'))
+            btn.bind("<Button-1>", lambda e, b=btn, c=color: b.config(bg=c))
+            btn.bind("<Button-1>", lambda e, b=btn, c=color: b.config(bg=self.darken_color(c)))
+            btn.grid(row=i, column=0, sticky='ew', padx=2, pady=2, ipadx=50, ipady=5)
         
         # Правая панель с графиком
         right_panel = tk.Frame(self, bg='#1e1e1e')
