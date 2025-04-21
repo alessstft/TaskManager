@@ -7,7 +7,7 @@ use std::time::Duration;
 use lazy_static::lazy_static;
 use local_ipaddress;
 use sysinfo::NetworkExt;
-
+use std::process::Command;
 // Для NVML
 use nvml_wrapper::NVML;
 use nvml_wrapper::enum_wrappers::device::TemperatureSensor;
