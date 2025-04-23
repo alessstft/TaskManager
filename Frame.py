@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import ttk, Canvas, messagebox
+from tkinter import ttk, Canvas, messagebox, Menu
 from collections import deque
 import threading
 import time
@@ -28,7 +28,7 @@ class PerformanceTab(tk.Frame):
         self._prev_values = {}
         self._last_update = 0
         self._update_interval = 0.5
-        
+
     def init_ui(self):
         self.grid_rowconfigure(0, weight=1)
         self.grid_columnconfigure(1, weight=1)
@@ -38,6 +38,7 @@ class PerformanceTab(tk.Frame):
         left_panel.grid(row=0, column=0, sticky='ns')
         left_panel.grid_propagate(False)
         
+
         metrics = {
             'cpu': ('ЦП', '#3794ff'),
             'memory': ('Память', '#ff4a4a'),
@@ -285,11 +286,11 @@ class PerformanceTab(tk.Frame):
             network_info = []
 
             labels = [
-                ("Отправлено", f"{net['send_speed']/1024:.1f} КБ/с"),
-                ("Получено", f"{net['recv_speed']/1024:.1f} КБ/с"),
+                ("Отправлено", f"{network_info['send_speed']/1024:.1f} КБ/с"),
+                ("Получено", f"{network_info['recv_speed']/1024:.1f} КБ/с"),
                 ("Скорость соединения", "1.0 Гбит/с"),
                 ("Состояние", "Подключено"),
-                ("IPv4-адрес", net['ipv4']),
+                ("IPv4-адрес", network_info['ipv4']),
                 ("Тип адаптера", "Ethernet"),
                 ("DNS-сервер", "8.8.8.8"),
                 ("Шлюз по умолчанию", "192.168.1.1"),
@@ -352,9 +353,19 @@ class TaskManager:
         self._setup_styles()
         self._create_interface()
         
+        self.m = Menu(root, tearoff=0)
+        self.m.add_command(label ="Получить путь", command=self._get_path) 
+        self.m.add_command(label ="Завершить процесс", command=self._end_task)
+
         self.system_monitor.register_callback(self._update_data_buffer)
         self.system_monitor.start_monitoring(update_interval=2.0)
         self._schedule_gui_update()
+
+    def do_popup(self, event):
+        try:
+            self.m.tk_popup(event.x_root, event.y_root)
+        finally:
+            self.m.grab_release()
 
     def _setup_styles(self):
         style = ttk.Style()
@@ -392,31 +403,13 @@ class TaskManager:
             self.process_tree.column(col, width=80, anchor="center")
         self.process_tree.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         
+        # self.process_tree.bind('<<TreeviewSelect>>', self._on_process_select)
         self.process_tree.bind('<<TreeviewSelect>>', self._on_process_select)
-        self.process_tree.bind('<Button-3>', self._on_right_click)
+        self.process_tree.bind('<Button-3>', self.do_popup)
+        self.process_tree.bind('<space>', self._on_right_click)
 
         btn_frame = tk.Frame(self.processes_frame, bg="#2d2d2d")
         btn_frame.pack(fill=tk.X, pady=10)
-
-        self.end_task_btn = tk.Button(
-            btn_frame,
-            text="Завершить задачу",
-            bg="#5c2d5c",
-            fg="white",
-            font=("Arial", 12, "bold"),
-            command=self._end_task
-        )
-        self.end_task_btn.pack(side=tk.LEFT, padx=10, ipadx=20, ipady=5)
-
-        self.get_path_btn = tk.Button(
-            btn_frame,
-            text="Получить путь",
-            bg="#5c2d5c",
-            fg="white",
-            font=("Arial", 12, "bold"),
-            command=self._get_path
-        )
-        self.get_path_btn.pack(side=tk.RIGHT, padx=10, ipadx=20, ipady=5)
 
     def _setup_services_tab(self):
         columns = ("Имя", "ID служб", "Состояние")
@@ -551,9 +544,18 @@ class TaskManager:
         path = self.system_monitor.get_proc_path(pid)
         messagebox.showinfo("Успех", f"Путь {process_name}: {path}")
 
+    def _print(self, event):
+        for i in range(len(self.process_tree.selection())):
+            print(str(i) + ": " + self.process_tree.selection()[i])
+    
+    def _sprint(self, event):
+        print(self.process_tree.selection())
+    
+
     def __del__(self):
         if hasattr(self, 'system_monitor'):
             self.system_monitor.stop_monitoring()
+    
 
 if __name__ == "__main__":
     root = tk.Tk()
@@ -563,5 +565,4 @@ if __name__ == "__main__":
         root.iconphoto(True, icon)
     except:
         pass  
-    
     root.mainloop()
