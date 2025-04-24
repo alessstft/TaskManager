@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import ttk, Canvas, messagebox
+from tkinter import ttk, Canvas, messagebox, Menu
 from collections import deque
 import threading
 import time
@@ -22,14 +22,13 @@ class PerformanceTab(tk.Frame):
             'cpu': deque(maxlen=60),
             'memory': deque(maxlen=60),
             'disk': deque(maxlen=60),
-            'network': deque(maxlen=60),
-            'gpu' : deque(maxlen=60)
+            'network': deque(maxlen=60)
         }
         self.current_metric = 'cpu'
         self._prev_values = {}
         self._last_update = 0
         self._update_interval = 0.5
-        
+
     def init_ui(self):
         self.grid_rowconfigure(0, weight=1)
         self.grid_columnconfigure(1, weight=1)
@@ -39,12 +38,12 @@ class PerformanceTab(tk.Frame):
         left_panel.grid(row=0, column=0, sticky='ns')
         left_panel.grid_propagate(False)
         
+
         metrics = {
             'cpu': ('ЦП', '#3794ff'),
             'memory': ('Память', '#ff4a4a'),
             'disk': ('Диск', '#4aff4a'),
-            'network': ('Ethernet', '#ffd700'),
-            'gpu': ('GPU', '#510eed')
+            'network': ('Ethernet', '#ffd700')
         }
         
         for i, (metric, (name, color)) in enumerate(metrics.items()):
@@ -63,11 +62,11 @@ class PerformanceTab(tk.Frame):
             btn.bind("<Leave>", lambda e, b=btn: b.config(bg='#2d2d2d'))
             btn.bind("<Button-1>", lambda e, b=btn, c=color: b.config(bg=c))
             btn.bind("<Button-1>", lambda e, b=btn, c=color: b.config(bg=self.dark_color(c)))
-            btn.grid(row=i, column=0, sticky='ew', padx=4, pady=4, ipadx=60, ipady=6)
+            btn.grid(row=i, column=0, sticky='ew', padx=2, pady=2, ipadx=50, ipady=5)
         
         # Правая панель с графиком и деталями
         right_panel = tk.Frame(self, bg='#1e1e1e')
-        right_panel.grid(row=0, column=2, sticky='nsew')
+        right_panel.grid(row=0, column=1, sticky='nsew')
         
         # График
         self.chart_title = tk.Label(right_panel, text="ЦП", bg='#1e1e1e', fg='white', 
@@ -90,7 +89,6 @@ class PerformanceTab(tk.Frame):
             ('Название: ', ' '),
             ("Использование", "0%"),
             ("Скорость", "0.00"),
-            ('Частота', '0'),
             ("Процессы", "0"),
             ("Потоки", "0"),
             ("Время работы", "0:00:00")
@@ -123,15 +121,13 @@ class PerformanceTab(tk.Frame):
             'cpu': '#3794ff',
             'memory': '#ff4a4a',
             'disk': '#4aff4a',
-            'network': '#ffd700', 
-            'gpu': '#00FFFF'
+            'network': '#ffd700'
         }
         titles = {
             'cpu': 'ЦП',
             'memory': 'Память',
             'disk': 'Диск',
-            'network': 'Ethernet',
-            'gpu': 'GPU'
+            'network': 'Ethernet'
         }
         self.chart_title.config(text=titles[metric])
         self._current_color = colors[metric]
@@ -144,8 +140,6 @@ class PerformanceTab(tk.Frame):
             self._update_disk_details(self._last_system_info if hasattr(self, '_last_system_info') else {})
         elif metric == 'network':
             self._update_ethernet_details(self._last_system_info if hasattr(self, '_last_system_info') else {})
-        elif metric == 'gpu':
-            self._update_gpu_details(self._last_system_info if hasattr(self, '_last_system_info') else {})
         else:
             # Скрываем детали для CPU
             if hasattr(self, 'details_frame'):
@@ -181,7 +175,6 @@ class PerformanceTab(tk.Frame):
         
         metrics['disk'] = system_info.get('disk_usage', 0.0)
         metrics['network'] = system_info.get('network_usage', 0.0)
-        metrics['gpu'] = system_info.get('gpu_usage', 0.0)
         
         return metrics
         
@@ -259,13 +252,13 @@ class PerformanceTab(tk.Frame):
 
     def _update_disk_details(self, system_info):
         if not hasattr(self, 'system_monitor') or self.system_monitor is None:
-            return  
+            return  # Прекращаем выполнение, если system_monitor не задан
 
         disk_info = self.system_monitor.get_disk_info()
-        if not disk_info: 
+        if not disk_info:  # Проверяем, что данные есть
             return
 
-        disk_info = disk_info[0]  
+        disk_info = disk_info[0]  # Берем первый диск
         total_gb = disk_info['total_space'] / (1024**3)
         available_gb = disk_info['available_space'] / (1024**3)
         used_gb = total_gb - available_gb
@@ -287,48 +280,28 @@ class PerformanceTab(tk.Frame):
 
     def _update_ethernet_details(self, system_info):
         if not hasattr(self, 'system_monitor') or self.system_monitor is None:
-            return
+            return  # Прекращаем выполнение, если system_monitor не задан
 
         network_info = self.system_monitor.get_network_info()
-        if not network_info:  # Если данных нет
-            labels = [("Состояние", "Не подключено")]
-        else:
-        # Предполагаем, что network_info - словарь с нужными полями
-        # Если это список, нужно обращаться по индексу или перебирать элементы
+        if not network_info:  # Проверяем, что данные есть
+            network_info = []
+
             labels = [
-                ("Отправлено", f"{network_info.get('send_speed', 0)/1024:.1f} КБ/с"),
-                ("Получено", f"{network_info.get('recv_speed', 0)/1024:.1f} КБ/с"),
+                ("Отправлено", f"{network_info['send_speed']/1024:.1f} КБ/с"),
+                ("Получено", f"{network_info['recv_speed']/1024:.1f} КБ/с"),
                 ("Скорость соединения", "1.0 Гбит/с"),
                 ("Состояние", "Подключено"),
-                ("IPv4-адрес", network_info.get('ipv4', 'N/A')),
+                ("IPv4-адрес", network_info['ipv4']),
                 ("Тип адаптера", "Ethernet"),
                 ("DNS-сервер", "8.8.8.8"),
                 ("Шлюз по умолчанию", "192.168.1.1"),
                 ("Маска подсети", "255.255.255.0"),
                 ("DHCP", "Включен")
             ]
-    
-        self._update_details("Ethernet", labels)
-
-    def _update_gpu_details(self, system_info):
-        if not hasattr(self, 'system_monitor') or self.system_monitor is None:
-            return
-
-        gpu_info = self.system_monitor.get_gpu_info()
-        if not gpu_info:
-            labels = [("Состояние", "GPU не обнаружен")]
         else:
-            labels = [
-                ("Название", gpu_info.get('name', 'N/A')),
-                ("Использование", f"{gpu_info.get('load', 0):.1f}%"),
-                ("Память", f"{gpu_info.get('memory_used', 0)}/{gpu_info.get('memory_total', 1)} MB"),
-                ("Свободно памяти", f"{gpu_info.get('memory_free', 0)} MB"),
-                ("Температура", f"{gpu_info.get('temperature', 0)}°C"),
-                ("Драйвер", gpu_info.get('driver', 'N/A')),
-                ("UUID", gpu_info.get('uuid', 'N/A'))
-            ]
-    
-        self._update_details("Информация о GPU", labels)
+            labels = [("Состояние", "Не подключено")]
+            
+        self._update_details("Ethernet", labels)
 
     def _update_details(self, header_text, labels):
         """Обновляет содержимое панели деталей"""
@@ -381,9 +354,20 @@ class TaskManager:
         self._setup_styles()
         self._create_interface()
         
+        self.m = Menu(root, tearoff=0)
+        self.m.add_command(label ="Получить путь", command=self._get_path) 
+        self.m.add_command(label ="Завершить процесс", command=self._end_task)
+
         self.system_monitor.register_callback(self._update_data_buffer)
-        self.system_monitor.start_monitoring(update_interval=2.0)
+        self.system_monitor.start_monitoring()
+        self._update_gui()
         self._schedule_gui_update()
+
+    def do_popup(self, event):
+        try:
+            self.m.tk_popup(event.x_root, event.y_root)
+        finally:
+            self.m.grab_release()
 
     def _setup_styles(self):
         style = ttk.Style()
@@ -421,31 +405,13 @@ class TaskManager:
             self.process_tree.column(col, width=80, anchor="center")
         self.process_tree.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         
+        # self.process_tree.bind('<<TreeviewSelect>>', self._on_process_select)
         self.process_tree.bind('<<TreeviewSelect>>', self._on_process_select)
-        self.process_tree.bind('<Button-3>', self._on_right_click)
+        self.process_tree.bind('<Button-3>', self.do_popup)
+        self.process_tree.bind('<space>', self._on_right_click)
 
         btn_frame = tk.Frame(self.processes_frame, bg="#2d2d2d")
         btn_frame.pack(fill=tk.X, pady=10)
-
-        self.end_task_btn = tk.Button(
-            btn_frame,
-            text="Завершить задачу",
-            bg="#5c2d5c",
-            fg="white",
-            font=("Arial", 12, "bold"),
-            command=self._end_task
-        )
-        self.end_task_btn.pack(side=tk.LEFT, padx=10, ipadx=20, ipady=5)
-
-        self.get_path_btn = tk.Button(
-            btn_frame,
-            text="Получить путь",
-            bg="#5c2d5c",
-            fg="white",
-            font=("Arial", 12, "bold"),
-            command=self._get_path
-        )
-        self.get_path_btn.pack(side=tk.RIGHT, padx=10, ipadx=20, ipady=5)
 
     def _setup_services_tab(self):
         columns = ("Имя", "ID служб", "Состояние")
@@ -469,7 +435,7 @@ class TaskManager:
 
     def _schedule_gui_update(self):
         self._update_gui()
-        self.root.after(1500, self._schedule_gui_update)
+        self.root.after(1000, self._schedule_gui_update)
 
     def _update_gui(self):
         with self._data_lock:
@@ -483,21 +449,19 @@ class TaskManager:
         cpu_info = self.system_monitor._get_cpu_info()
         memory_info = self.system_monitor._get_memory_info()
         disk_info = self.system_monitor.get_disk_info()
-        gpu_info = self.system_monitor.get_gpu_info()
         
         # Format the data for the performance tab
         system_info = {
             'cpu_percent': cpu_info['usage'],
             'memory': {
-                'total': memory_info['total'] / (1024 * 1024 * 1024),  
-                'available': memory_info['available'] / (1024 * 1024 * 1024)  
+                'total': memory_info['total'] / (1024 * 1024 * 1024),  # Convert to GB
+                'available': memory_info['available'] / (1024 * 1024 * 1024)  # Convert to GB
             },
             'disk_usage': disk_info[0]['percent'] if disk_info and 'percent' in disk_info[0] else 
                           (1 - disk_info[0]['available_space'] / disk_info[0]['total_space']) * 100 if disk_info else 0,
-            'network_usage': 0, 
+            'network_usage': 0,  # Will be updated with proper calculation
             'process_count': cpu_info['process_count'],
-            'thread_count': 0,  
-            
+            'thread_count': 0,  # This information might not be directly available from the DLL
             'uptime': cpu_info['work_time']
         }
         
@@ -585,15 +549,14 @@ class TaskManager:
     def __del__(self):
         if hasattr(self, 'system_monitor'):
             self.system_monitor.stop_monitoring()
+    
 
 if __name__ == "__main__":
     root = tk.Tk()
-    
+    app = TaskManager(root)
     try:
-        icon = tk.PhotoImage(file='C:/Users/studentcoll/Desktop/TaskManager-Boba/icon.png')
+        icon = tk.PhotoImage(file=R'C:\taskmng\TaskManager\icon.png')
         root.iconphoto(True, icon)
     except:
         pass  
-
-    app = TaskManager(root)
     root.mainloop()

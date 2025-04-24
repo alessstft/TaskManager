@@ -82,7 +82,7 @@ class NetworksStaticInfoArray(Structure):
     ]
 
 class SystemMonitor:
-    def __init__(self, dll_path: str = "C:/taskmng/TaskManager/dll2/target/debug/sys_info_fn.dll"):
+    def __init__(self, dll_path: str = R"C:\taskmng\TaskManager\dll2\target\debug\sys_info_fn.dll"):
         try:
             self.dll = ctypes.CDLL(dll_path)
         except Exception as e:
@@ -121,6 +121,7 @@ class SystemMonitor:
         self.dll.start_process_collector()
         
         def update_loop():
+
             while not self._stop_event.is_set():
                 start_time = time.time()
                 self._update_data()
@@ -250,27 +251,6 @@ class SystemMonitor:
         self._last_update_time = current_time
         self.dll.free_networks_static_info_array(network_array)
         return networks
-
-    def get_gpu_info(self):
-        try:
-            gpus = GPUtil.getGPUs()
-            if not gpus:
-                return None
-                
-            gpu = gpus[0]  
-            return {
-                'name': gpu.name,
-                'load': gpu.load * 100,  
-                'memory_total': gpu.memoryTotal,
-                'memory_used': gpu.memoryUsed,
-                'memory_free': gpu.memoryFree,
-                'temperature': gpu.temperature,
-                'driver': gpu.driver,
-                'uuid': gpu.uuid
-            }
-        except Exception as e:
-            print(f"Ошибка получения данных GPU: {e}")
-            return None
 
     def get_disk_info(self) -> List[Dict]:
         return self._get_disk_info()
