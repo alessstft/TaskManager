@@ -367,7 +367,7 @@ class TaskManager:
     def __init__(self, root):
         self.root = root
         self.root.title("Диспетчер задач")
-        self.root.geometry("900x700")
+        self.root.geometry("1000x700")
         self.root.configure(bg="#2d2d2d")
         self.is_dark_theme = True
 
