@@ -406,7 +406,7 @@ class TaskManager:
         self.process_tree.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         
         # self.process_tree.bind('<<TreeviewSelect>>', self._on_process_select)
-        self.process_tree.bind('<<TreeviewSelect>>', self._on_process_select)
+        self.process_tree.bind('<<TreeviewSelect>>', self._on_space)
         self.process_tree.bind('<Button-3>', self.do_popup)
         self.process_tree.bind('<space>', self._on_right_click)
 
@@ -506,7 +506,7 @@ class TaskManager:
         else:
             self._process_selected = False
 
-    def _on_right_click(self, event):
+    def _on_space(self, event):
         self.process_tree.selection_remove(self.process_tree.selection())
         self._process_selected = False
 
