@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import ttk, Canvas, messagebox
+from tkinter import ttk, Canvas, messagebox, Menu
 from collections import deque
 import threading
 import time
@@ -10,12 +10,14 @@ import os
 class PerformanceTab(tk.Frame):
     def __init__(self, parent, system_monitor=None):
         super().__init__(parent)
-        self.system_monitor = system_monitor
+        self.system_monitor = system_monitor  
         self._data_lock = threading.Lock()
         self._update_lock = threading.Lock()
         self.is_dark_theme = parent.is_dark_theme if hasattr(parent, 'is_dark_theme') else False
+        self.init_data()
+        self.init_ui()
         
-        # Инициализация данных
+    def init_data(self):
         self.values = {
             'cpu': deque(maxlen=60),
             'memory': deque(maxlen=60),
@@ -27,115 +29,7 @@ class PerformanceTab(tk.Frame):
         self._prev_values = {}
         self._last_update = 0
         self._update_interval = 0.5
-        
-        # Создаем элементы интерфейса
-        self.init_ui()
-        
-        # Добавляем индикатор загрузки
-        self.show_loading_indicator()
-        
-        # Запускаем загрузку данных
-        self.start_data_loading()
 
-    def show_loading_indicator(self):
-        """Показывает индикатор загрузки"""
-        self.loading_frame = tk.Frame(self, bg='#1e1e1e')
-        self.loading_frame.place(relx=0.5, rely=0.5, anchor="center")
-        
-        # Круговой индикатор
-        self.loading_canvas = tk.Canvas(
-            self.loading_frame, 
-            width=60, 
-            height=60, 
-            bg='#1e1e1e', 
-            highlightthickness=0
-        )
-        self.loading_canvas.pack()
-        self.loading_arc = self.loading_canvas.create_arc(
-            10, 10, 50, 50,
-            start=0,
-            extent=0,
-            outline="#3794ff",
-            width=3,
-            style=tk.ARC
-        )
-        self.loading_angle = 0
-        self.animate_loading()
-        
-        # Текст загрузки
-        loading_label = tk.Label(
-            self.loading_frame, 
-            text="Загрузка данных...", 
-            font=("Arial", 12), 
-            bg="#1e1e1e", 
-            fg="white"
-        )
-        loading_label.pack(pady=(10, 0))
-
-    def animate_loading(self):
-        """Анимация индикатора загрузки"""
-        self.loading_angle = (self.loading_angle + 10) % 360
-        self.loading_canvas.itemconfig(
-            self.loading_arc, 
-            start=self.loading_angle, 
-            extent=min(300, self.loading_angle + 60)
-        )
-        self.after(50, self.animate_loading)
-
-    def start_data_loading(self):
-        """Запускает загрузку данных в отдельном потоке"""
-        def load_data():
-            # Загружаем данные CPU
-            cpu_info = self.system_monitor._get_cpu_info()
-            
-            # Загружаем данные памяти
-            memory_info = self.system_monitor._get_memory_info()
-            
-            # Загружаем данные диска
-            disk_info = self.system_monitor.get_disk_info()
-            
-            # Загружаем данные сети
-            network_info = self.system_monitor.get_network_info()
-            
-            # Загружаем данные GPU
-            gpu_info = self.system_monitor.get_gpu_info()
-            
-            # Формируем системную информацию
-            system_info = {
-                'cpu_percent': cpu_info['usage'],
-                'memory': {
-                    'total': memory_info['total'],
-                    'available': memory_info['available']
-                },
-                'disk_usage': disk_info[0]['percent'] if disk_info else 0,
-                'network_usage': network_info[0]['send_speed'] if network_info else 0,
-                'gpu_usage': gpu_info['load'] if gpu_info else 0,
-                'process_count': cpu_info['process_count'],
-                'thread_count': 0,
-                'uptime': cpu_info['work_time']
-            }
-            
-            # Обновляем интерфейс в основном потоке
-            self.after(0, self.finish_loading, system_info)
-        
-        # Запускаем в отдельном потоке
-        threading.Thread(target=load_data, daemon=True).start()
-
-    def finish_loading(self, system_info):
-        """Завершает загрузку и показывает данные"""
-        # Скрываем индикатор загрузки
-        self.loading_frame.destroy()
-        
-        # Инициализируем данные
-        self.init_data()
-        
-        # Обновляем данные
-        self.update_data(system_info)
-        
-        # Показываем основной интерфейс
-        self.init_ui()
-        
-        
     def init_ui(self):
         self.grid_rowconfigure(0, weight=1)
         self.grid_columnconfigure(1, weight=1)
@@ -301,7 +195,7 @@ class PerformanceTab(tk.Frame):
         self.info_labels["Использование"].config(text=f"{cpu_percent:.1f}%")
         self.info_labels["Процессы"].config(text=str(system_info.get('process_count', 0)))
         self.info_labels["Потоки"].config(text=str(system_info.get('thread_count', 0)))
-    
+        
         uptime = system_info.get('uptime', 0)
         hours = int(uptime // 3600)
         minutes = int((uptime % 3600) // 60)
@@ -469,7 +363,7 @@ class TaskManager:
     def __init__(self, root):
         self.root = root
         self.root.title("Диспетчер задач")
-        self.root.geometry("1000x800")
+        self.root.geometry("900x700")
         self.root.configure(bg="#2d2d2d")
         self.is_dark_theme = True
 
@@ -483,9 +377,20 @@ class TaskManager:
         self._setup_styles()
         self._create_interface()
         
+        self.m = Menu(root, tearoff=0)
+        self.m.add_command(label ="Получить путь", command=self._get_path) 
+        self.m.add_command(label ="Завершить процесс", command=self._end_task)
+
         self.system_monitor.register_callback(self._update_data_buffer)
-        self.system_monitor.start_monitoring(update_interval=2.0)
+        self.system_monitor.start_monitoring()
+        self._update_gui()
         self._schedule_gui_update()
+
+    def do_popup(self, event):
+        try:
+            self.m.tk_popup(event.x_root, event.y_root)
+        finally:
+            self.m.grab_release()
 
     def _setup_styles(self):
         style = ttk.Style()
@@ -505,8 +410,8 @@ class TaskManager:
         self.notebook.add(self.processes_frame, text="Процессы")
         self._setup_processes_tab()
 
-    # Вкладка производительности 
-        self.performance_tab = PerformanceTab(self.notebook)
+    # Вкладка производительности (передаем system_monitor)
+        self.performance_tab = PerformanceTab(self.notebook, self.system_monitor)
         self.notebook.add(self.performance_tab, text="Производительность")
         def set_monitor():
             self.performance_tab.system_monitor = self.system_monitor
@@ -529,30 +434,11 @@ class TaskManager:
         self.process_tree.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         
         self.process_tree.bind('<<TreeviewSelect>>', self._on_process_select)
-        self.process_tree.bind('<Button-3>', self._on_right_click)
+        self.process_tree.bind('<Button-3>', self.do_popup)
+        self.process_tree.bind('<space>', self._on_right_click)
 
         btn_frame = tk.Frame(self.processes_frame, bg="#2d2d2d")
         btn_frame.pack(fill=tk.X, pady=10)
-
-        self.end_task_btn = tk.Button(
-            btn_frame,
-            text="Завершить задачу",
-            bg="#5c2d5c",
-            fg="white",
-            font=("Arial", 12, "bold"),
-            command=self._end_task
-        )
-        self.end_task_btn.pack(side=tk.LEFT, padx=10, ipadx=20, ipady=5)
-
-        self.get_path_btn = tk.Button(
-            btn_frame,
-            text="Получить путь",
-            bg="#5c2d5c",
-            fg="white",
-            font=("Arial", 12, "bold"),
-            command=self._get_path
-        )
-        self.get_path_btn.pack(side=tk.RIGHT, padx=10, ipadx=20, ipady=5)
 
     def _setup_services_tab(self):
         columns = ("Имя", "ID служб", "Состояние")
@@ -584,25 +470,24 @@ class TaskManager:
                 self._update_processes(self._process_info)
                 self._update_performance()
                 self._update_services()
+                gpu_info = self.system_monitor.get_gpu_info()
 
     def _update_performance(self):
         cpu_info = self.system_monitor._get_cpu_info()
         memory_info = self.system_monitor._get_memory_info()
         disk_info = self.system_monitor.get_disk_info()
-        gpu_info = self.system_monitor.get_gpu_info()
         
         system_info = {
             'cpu_percent': cpu_info['usage'],
             'memory': {
-                'total': memory_info['total'] / (1024 * 1024 * 1024),  
-                'available': memory_info['available'] / (1024 * 1024 * 1024)  
+                'total': memory_info['total'] / (1024 * 1024 * 1024), 
+                'available': memory_info['available'] / (1024 * 1024 * 1024) 
             },
             'disk_usage': disk_info[0]['percent'] if disk_info and 'percent' in disk_info[0] else 
                           (1 - disk_info[0]['available_space'] / disk_info[0]['total_space']) * 100 if disk_info else 0,
             'network_usage': 0, 
             'process_count': cpu_info['process_count'],
             'thread_count': 0,  
-            
             'uptime': cpu_info['work_time']
         }
         
@@ -690,15 +575,14 @@ class TaskManager:
     def __del__(self):
         if hasattr(self, 'system_monitor'):
             self.system_monitor.stop_monitoring()
+    
 
 if __name__ == "__main__":
     root = tk.Tk()
-    
+    app = TaskManager(root)
     try:
-        icon = tk.PhotoImage(file='TaskManager-Boba/icon.png')
+        icon = tk.PhotoImage(file=R'C:\taskmng\TaskManager\icon.png')
         root.iconphoto(True, icon)
     except:
         pass  
-
-    app = TaskManager(root)
     root.mainloop()
