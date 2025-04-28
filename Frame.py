@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import ttk, Canvas, messagebox, Menu
+from tkinter import ttk, Canvas, messagebox
 from collections import deque
 import threading
 import time
@@ -10,25 +10,132 @@ import os
 class PerformanceTab(tk.Frame):
     def __init__(self, parent, system_monitor=None):
         super().__init__(parent)
-        self.system_monitor = system_monitor  
+        self.system_monitor = system_monitor
         self._data_lock = threading.Lock()
         self._update_lock = threading.Lock()
         self.is_dark_theme = parent.is_dark_theme if hasattr(parent, 'is_dark_theme') else False
-        self.init_data()
-        self.init_ui()
         
-    def init_data(self):
+        # Инициализация данных
         self.values = {
             'cpu': deque(maxlen=60),
             'memory': deque(maxlen=60),
             'disk': deque(maxlen=60),
-            'network': deque(maxlen=60)
+            'network': deque(maxlen=60),
+            'gpu': deque(maxlen=60)
         }
         self.current_metric = 'cpu'
         self._prev_values = {}
         self._last_update = 0
         self._update_interval = 0.5
+        
+        # Создаем элементы интерфейса
+        self.init_ui()
+        
+        # Добавляем индикатор загрузки
+        self.show_loading_indicator()
+        
+        # Запускаем загрузку данных
+        self.start_data_loading()
 
+    def show_loading_indicator(self):
+        """Показывает индикатор загрузки"""
+        self.loading_frame = tk.Frame(self, bg='#1e1e1e')
+        self.loading_frame.place(relx=0.5, rely=0.5, anchor="center")
+        
+        # Круговой индикатор
+        self.loading_canvas = tk.Canvas(
+            self.loading_frame, 
+            width=60, 
+            height=60, 
+            bg='#1e1e1e', 
+            highlightthickness=0
+        )
+        self.loading_canvas.pack()
+        self.loading_arc = self.loading_canvas.create_arc(
+            10, 10, 50, 50,
+            start=0,
+            extent=0,
+            outline="#3794ff",
+            width=3,
+            style=tk.ARC
+        )
+        self.loading_angle = 0
+        self.animate_loading()
+        
+        # Текст загрузки
+        loading_label = tk.Label(
+            self.loading_frame, 
+            text="Загрузка данных...", 
+            font=("Arial", 12), 
+            bg="#1e1e1e", 
+            fg="white"
+        )
+        loading_label.pack(pady=(10, 0))
+
+    def animate_loading(self):
+        """Анимация индикатора загрузки"""
+        self.loading_angle = (self.loading_angle + 10) % 360
+        self.loading_canvas.itemconfig(
+            self.loading_arc, 
+            start=self.loading_angle, 
+            extent=min(300, self.loading_angle + 60)
+        )
+        self.after(50, self.animate_loading)
+
+    def start_data_loading(self):
+        """Запускает загрузку данных в отдельном потоке"""
+        def load_data():
+            # Загружаем данные CPU
+            cpu_info = self.system_monitor._get_cpu_info()
+            
+            # Загружаем данные памяти
+            memory_info = self.system_monitor._get_memory_info()
+            
+            # Загружаем данные диска
+            disk_info = self.system_monitor.get_disk_info()
+            
+            # Загружаем данные сети
+            network_info = self.system_monitor.get_network_info()
+            
+            # Загружаем данные GPU
+            gpu_info = self.system_monitor.get_gpu_info()
+            
+            # Формируем системную информацию
+            system_info = {
+                'cpu_percent': cpu_info['usage'],
+                'memory': {
+                    'total': memory_info['total'],
+                    'available': memory_info['available']
+                },
+                'disk_usage': disk_info[0]['percent'] if disk_info else 0,
+                'network_usage': network_info[0]['send_speed'] if network_info else 0,
+                'gpu_usage': gpu_info['load'] if gpu_info else 0,
+                'process_count': cpu_info['process_count'],
+                'thread_count': 0,
+                'uptime': cpu_info['work_time']
+            }
+            
+            # Обновляем интерфейс в основном потоке
+            self.after(0, self.finish_loading, system_info)
+        
+        # Запускаем в отдельном потоке
+        threading.Thread(target=load_data, daemon=True).start()
+
+    def finish_loading(self, system_info):
+        """Завершает загрузку и показывает данные"""
+        # Скрываем индикатор загрузки
+        self.loading_frame.destroy()
+        
+        # Инициализируем данные
+        self.init_data()
+        
+        # Обновляем данные
+        self.update_data(system_info)
+        
+        # Показываем основной интерфейс
+        self.init_ui()
+        
+        
     def init_ui(self):
         self.grid_rowconfigure(0, weight=1)
         self.grid_columnconfigure(1, weight=1)
@@ -194,21 +301,44 @@ class PerformanceTab(tk.Frame):
         self.info_labels["Использование"].config(text=f"{cpu_percent:.1f}%")
         self.info_labels["Процессы"].config(text=str(system_info.get('process_count', 0)))
         self.info_labels["Потоки"].config(text=str(system_info.get('thread_count', 0)))
-        
-        # Форматируем время работы
+    
         uptime = system_info.get('uptime', 0)
         hours = int(uptime // 3600)
         minutes = int((uptime % 3600) // 60)
         seconds = int(uptime % 60)
         self.info_labels["Время работы"].config(text=f"{hours}:{minutes:02d}:{seconds:02d}")
-        
-        # Если текущая метрика - память, показываем детальную информацию
-        if self.current_metric == 'memory':
+
+        if self.current_metric == 'cpu':
+            self._update_cpu_details(system_info)
+        elif self.current_metric == 'memory':
             self._update_memory_details(system_info)
-        else:
-            # Если не память - скрываем детали
-            if hasattr(self, 'details_frame'):
-                self.details_frame.place_forget()
+        elif self.current_metric == 'disk':
+            self._update_disk_details(system_info)
+        elif self.current_metric == 'network':
+            self._update_ethernet_details(system_info)
+        elif self.current_metric == 'gpu':
+            self._update_gpu_details(system_info)
+
+    def _update_cpu_details(self, system_info):
+        if not hasattr(self, 'system_monitor') or self.system_monitor is None:
+            return  
+
+        cpu_info = self.system_monitor._get_cpu_info()
+    
+        labels = [
+            ("Название", cpu_info.get('name', 'N/A')),
+            ("Использование", f"{cpu_info.get('usage', 0):.1f}%"),
+            ("Базовая частота", f"{cpu_info.get('base_clock', 0):.1f} GHz"),
+            ("Текущая частота", f"{cpu_info.get('current_clock', 0):.1f} GHz"),
+            ("Ядра", f"{cpu_info.get('cores', 0)}"),
+            ("Логические процессоры", f"{cpu_info.get('logical_processors', 0)}"),
+            ("Процессы", str(system_info.get('process_count', 0))),
+            ("Потоки", str(system_info.get('thread_count', 0))),
+            ("Температура", f"{cpu_info.get('temperature', 'N/A')}°C"),
+            ("Архитектура", cpu_info.get('architecture', 'N/A'))
+        ]
+    
+        self._update_details("Информация о процессоре", labels)
     
     def _update_memory_details(self, system_info):
         """Обновляет панель с детальной информацией о памяти"""
@@ -220,7 +350,6 @@ class PerformanceTab(tk.Frame):
         used_gb = memory_info['used'] / (1024**3)
         available_gb = memory_info['available'] / (1024**3)
         
-        # Обновляем метки с актуальными данными
         labels = [
             ("Используется (сжатая)", f"{used_gb:.1f} ГБ (188 МБ)"),
             ("Доступно", f"{available_gb:.1f} ГБ"),
@@ -238,67 +367,81 @@ class PerformanceTab(tk.Frame):
 
     def _update_disk_details(self, system_info):
         if not hasattr(self, 'system_monitor') or self.system_monitor is None:
-            return  # Прекращаем выполнение, если system_monitor не задан
-
-        disk_info = self.system_monitor.get_disk_info()
-        if not disk_info:  # Проверяем, что данные есть
             return
 
-        disk_info = disk_info[0]  # Берем первый диск
-        total_gb = disk_info['total_space'] / (1024**3)
-        available_gb = disk_info['available_space'] / (1024**3)
-        used_gb = total_gb - available_gb
+        disk_info = self.system_monitor.get_disk_info()
+        if not disk_info:
+            labels = [("Состояние", "Диски не обнаружены")]
+        else:
+            disk = disk_info[0]
+            total_gb = disk['total_space'] / (1024**3)
+            used_gb = (disk['total_space'] - disk['available_space']) / (1024**3)
+            free_gb = disk['available_space'] / (1024**3)
         
-        labels = [
-            ("Активное время", "0%"),
-            ("Средняя скорость отклика", "0 мс"),
-            ("Скорость записи", "0 КБ/с"),
-            ("Скорость чтения", "0 КБ/с"),
-            ("Активное время записи", "0%"),
-            ("Активное время чтения", "0%"),
-            ("Размер раздела", f"{total_gb:.1f} ГБ"),
-            ("Свободно места", f"{available_gb:.1f} ГБ"),
-            ("Используется места", f"{used_gb:.1f} ГБ"),
-            ("Тип раздела", "NTFS")
-        ]
-        
-        self._update_details(f"Диск ({disk_info['name']})", labels)
+            labels = [
+                ("Название диска", disk.get('name', 'N/A')),
+                ("Файловая система", disk.get('file_system', 'N/A')),
+                ("Общий размер", f"{total_gb:.1f} ГБ"),
+                ("Использовано", f"{used_gb:.1f} ГБ ({disk.get('percent', 0):.1f}%)"),
+                ("Свободно", f"{free_gb:.1f} ГБ"),
+                ("Скорость чтения", f"{disk.get('read_speed', 0)/1024:.1f} МБ/с"),
+                ("Скорость записи", f"{disk.get('write_speed', 0)/1024:.1f} МБ/с"),
+                ("Тип диска", disk.get('type', 'N/A')),
+                ("Секторов на кластер", str(disk.get('sectors_per_cluster', 'N/A'))),
+            ("Размер сектора", f"{disk.get('bytes_per_sector', 0)} байт")
+            ]
+    
+        self._update_details("Информация о диске", labels)
 
     def _update_ethernet_details(self, system_info):
         if not hasattr(self, 'system_monitor') or self.system_monitor is None:
-            return  # Прекращаем выполнение, если system_monitor не задан
+            return
 
         network_info = self.system_monitor.get_network_info()
-        if not network_info:  # Проверяем, что данные есть
-            network_info = []
-
+        if not network_info: 
+            labels = [("Состояние", "Не подключено")]
+        else:
             labels = [
-                ("Отправлено", f"{network_info['send_speed']/1024:.1f} КБ/с"),
-                ("Получено", f"{network_info['recv_speed']/1024:.1f} КБ/с"),
+                ("Отправлено", f"{network_info.get('send_speed', 0)/1024:.1f} КБ/с"),
+                ("Получено", f"{network_info.get('recv_speed', 0)/1024:.1f} КБ/с"),
                 ("Скорость соединения", "1.0 Гбит/с"),
                 ("Состояние", "Подключено"),
-                ("IPv4-адрес", network_info['ipv4']),
+                ("IPv4-адрес", network_info.get('ipv4', 'N/A')),
                 ("Тип адаптера", "Ethernet"),
                 ("DNS-сервер", "8.8.8.8"),
                 ("Шлюз по умолчанию", "192.168.1.1"),
                 ("Маска подсети", "255.255.255.0"),
                 ("DHCP", "Включен")
             ]
-        else:
-            labels = [("Состояние", "Не подключено")]
-            
+    
         self._update_details("Ethernet", labels)
 
+    def _update_gpu_details(self, system_info):
+        if not hasattr(self, 'system_monitor') or self.system_monitor is None:
+            return
+
+        gpu_info = self.system_monitor.get_gpu_info()
+        if not gpu_info:
+            labels = [("Состояние", "GPU не обнаружен")]
+        else:
+            labels = [
+                ("Название", gpu_info.get('name', 'N/A')),
+                ("Использование", f"{gpu_info.get('load', 0):.1f}%"),
+                ("Память", f"{gpu_info.get('memory_used', 0)}/{gpu_info.get('memory_total', 1)} MB"),
+                ("Свободно памяти", f"{gpu_info.get('memory_free', 0)} MB"),
+                ("Температура", f"{gpu_info.get('temperature', 0)}°C"),
+                ("Драйвер", gpu_info.get('driver', 'N/A')),
+                ("UUID", gpu_info.get('uuid', 'N/A'))
+            ]
+    
+        self._update_details("Информация о GPU", labels)
+
     def _update_details(self, header_text, labels):
-        """Обновляет содержимое панели деталей"""
-        # Обновляем заголовок
         self.details_header.config(text=header_text)
         
-        # Очищаем старые метки
         for widget in self.details_container.winfo_children():
             widget.destroy()
         
-        # Создаем новые метки
         for i, (name, value) in enumerate(labels):
             row = i // 2
             col = i % 2
@@ -326,7 +469,7 @@ class TaskManager:
     def __init__(self, root):
         self.root = root
         self.root.title("Диспетчер задач")
-        self.root.geometry("900x700")
+        self.root.geometry("1000x800")
         self.root.configure(bg="#2d2d2d")
         self.is_dark_theme = True
 
@@ -340,20 +483,9 @@ class TaskManager:
         self._setup_styles()
         self._create_interface()
         
-        self.m = Menu(root, tearoff=0)
-        self.m.add_command(label ="Получить путь", command=self._get_path) 
-        self.m.add_command(label ="Завершить процесс", command=self._end_task)
-
         self.system_monitor.register_callback(self._update_data_buffer)
-        self.system_monitor.start_monitoring()
-        self._update_gui()
+        self.system_monitor.start_monitoring(update_interval=2.0)
         self._schedule_gui_update()
-
-    def do_popup(self, event):
-        try:
-            self.m.tk_popup(event.x_root, event.y_root)
-        finally:
-            self.m.grab_release()
 
     def _setup_styles(self):
         style = ttk.Style()
@@ -373,9 +505,14 @@ class TaskManager:
         self.notebook.add(self.processes_frame, text="Процессы")
         self._setup_processes_tab()
 
-    # Вкладка производительности (передаем system_monitor)
-        self.performance_tab = PerformanceTab(self.notebook, self.system_monitor)
+    # Вкладка производительности 
+        self.performance_tab = PerformanceTab(self.notebook)
         self.notebook.add(self.performance_tab, text="Производительность")
+        def set_monitor():
+            self.performance_tab.system_monitor = self.system_monitor
+            self.performance_tab.start_data_loading()
+    
+        self.root.after(100, set_monitor)
 
     # Вкладка служб
         self.services_frame = tk.Frame(self.notebook, bg="#2d2d2d")
@@ -391,13 +528,31 @@ class TaskManager:
             self.process_tree.column(col, width=80, anchor="center")
         self.process_tree.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         
-        # self.process_tree.bind('<<TreeviewSelect>>', self._on_process_select)
         self.process_tree.bind('<<TreeviewSelect>>', self._on_process_select)
-        self.process_tree.bind('<Button-3>', self.do_popup)
-        self.process_tree.bind('<space>', self._on_right_click)
+        self.process_tree.bind('<Button-3>', self._on_right_click)
 
         btn_frame = tk.Frame(self.processes_frame, bg="#2d2d2d")
         btn_frame.pack(fill=tk.X, pady=10)
+
+        self.end_task_btn = tk.Button(
+            btn_frame,
+            text="Завершить задачу",
+            bg="#5c2d5c",
+            fg="white",
+            font=("Arial", 12, "bold"),
+            command=self._end_task
+        )
+        self.end_task_btn.pack(side=tk.LEFT, padx=10, ipadx=20, ipady=5)
+
+        self.get_path_btn = tk.Button(
+            btn_frame,
+            text="Получить путь",
+            bg="#5c2d5c",
+            fg="white",
+            font=("Arial", 12, "bold"),
+            command=self._get_path
+        )
+        self.get_path_btn.pack(side=tk.RIGHT, padx=10, ipadx=20, ipady=5)
 
     def _setup_services_tab(self):
         columns = ("Имя", "ID служб", "Состояние")
@@ -421,7 +576,7 @@ class TaskManager:
 
     def _schedule_gui_update(self):
         self._update_gui()
-        self.root.after(1000, self._schedule_gui_update)
+        self.root.after(1500, self._schedule_gui_update)
 
     def _update_gui(self):
         with self._data_lock:
@@ -431,23 +586,23 @@ class TaskManager:
                 self._update_services()
 
     def _update_performance(self):
-        # Collect all data using system_monitor DLL
         cpu_info = self.system_monitor._get_cpu_info()
         memory_info = self.system_monitor._get_memory_info()
         disk_info = self.system_monitor.get_disk_info()
+        gpu_info = self.system_monitor.get_gpu_info()
         
-        # Format the data for the performance tab
         system_info = {
             'cpu_percent': cpu_info['usage'],
             'memory': {
-                'total': memory_info['total'] / (1024 * 1024 * 1024),  # Convert to GB
-                'available': memory_info['available'] / (1024 * 1024 * 1024)  # Convert to GB
+                'total': memory_info['total'] / (1024 * 1024 * 1024),  
+                'available': memory_info['available'] / (1024 * 1024 * 1024)  
             },
             'disk_usage': disk_info[0]['percent'] if disk_info and 'percent' in disk_info[0] else 
                           (1 - disk_info[0]['available_space'] / disk_info[0]['total_space']) * 100 if disk_info else 0,
-            'network_usage': 0,  # Will be updated with proper calculation
+            'network_usage': 0, 
             'process_count': cpu_info['process_count'],
-            'thread_count': 0,  # This information might not be directly available from the DLL
+            'thread_count': 0,  
+            
             'uptime': cpu_info['work_time']
         }
         
@@ -535,14 +690,15 @@ class TaskManager:
     def __del__(self):
         if hasattr(self, 'system_monitor'):
             self.system_monitor.stop_monitoring()
-    
 
 if __name__ == "__main__":
     root = tk.Tk()
-    app = TaskManager(root)
+    
     try:
-        icon = tk.PhotoImage(file=R'C:\taskmng\TaskManager\icon.png')
+        icon = tk.PhotoImage(file='TaskManager-Boba/icon.png')
         root.iconphoto(True, icon)
     except:
         pass  
+
+    app = TaskManager(root)
     root.mainloop()
