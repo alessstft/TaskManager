@@ -98,8 +98,29 @@ class PerformanceTab(tk.Frame):
         
         self.details_container = tk.Frame(self.details_frame, bg='#1e1e1e')
         self.details_container.pack(fill="both", expand=True, padx=5, pady=5)
+
+        self.initial_message = tk.Label(
+        right_panel, 
+        text="Выберите метрику для отображения информации", 
+        bg='#1e1e1e', 
+        fg='#aaaaaa',
+        font=('Arial', 14)
+    )
+        self.initial_message.pack(pady=50)
+    
+        self.chart_title.pack_forget()
+        self.canvas.pack_forget()
+        self.details_frame.pack_forget()
+
         
     def switch_metric(self, metric):
+        self.initial_message.pack_forget()
+    
+        self.chart_title.pack(anchor='w', padx=10, pady=(15, 0))
+        self.canvas.pack(fill='x', expand=False, padx=15, pady=(0, 20))
+        self.details_frame.pack(fill='both', expand=True, padx=10, pady=(0, 20))
+
+
         self.current_metric = metric
         colors = {
             'cpu': '#3794ff',
@@ -215,6 +236,8 @@ class PerformanceTab(tk.Frame):
 
     def _update_cpu_details(self, system_info):
         if not hasattr(self, 'system_monitor') or self.system_monitor is None:
+            labels = [("Состояние", "Данные о процессоре недоступны")]
+            self._update_details("Информация о процессоре", labels)
             return  
 
         cpu_info = self.system_monitor._get_cpu_info()
@@ -405,12 +428,10 @@ class TaskManager:
         self.notebook = ttk.Notebook(self.root)
         self.notebook.pack(fill=tk.BOTH, expand=True)
 
-    # Вкладка процессов
         self.processes_frame = tk.Frame(self.notebook, bg="#2d2d2d")
         self.notebook.add(self.processes_frame, text="Процессы")
         self._setup_processes_tab()
 
-    # Вкладка производительности (передаем system_monitor)
         self.performance_tab = PerformanceTab(self.notebook, self.system_monitor)
         self.notebook.add(self.performance_tab, text="Производительность")
         def set_monitor():
@@ -419,7 +440,6 @@ class TaskManager:
     
         self.root.after(100, set_monitor)
 
-    # Вкладка служб
         self.services_frame = tk.Frame(self.notebook, bg="#2d2d2d")
         self.notebook.add(self.services_frame, text="Службы")
         self._setup_services_tab()
