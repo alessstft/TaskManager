@@ -16,6 +16,7 @@ class PerformanceTab(tk.Frame):
         self.is_dark_theme = parent.is_dark_theme if hasattr(parent, 'is_dark_theme') else False
         self.init_data()
         self.init_ui()
+        self.switch_metric('cpu')
         
     def init_data(self):
         self.values = {
@@ -58,6 +59,9 @@ class PerformanceTab(tk.Frame):
                 command=lambda m=metric: self.switch_metric(m),
                 takefocus=0
             )
+            
+            if metric == 'cpu':
+                btn.config(bg=self.dark_color(color))
 
             btn.bind("<Enter>", lambda e, b=btn, c=color: b.config(bg=c))
             btn.bind("<Leave>", lambda e, b=btn: b.config(bg='#2d2d2d'))
