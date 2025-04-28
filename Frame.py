@@ -33,17 +33,16 @@ class PerformanceTab(tk.Frame):
         self.grid_rowconfigure(0, weight=1)
         self.grid_columnconfigure(1, weight=1)
         
-        # Левая панель с кнопками метрик
         left_panel = tk.Frame(self, bg='#2d2d2d', width=200)
         left_panel.grid(row=0, column=0, sticky='ns')
         left_panel.grid_propagate(False)
         
-
         metrics = {
             'cpu': ('ЦП', '#3794ff'),
             'memory': ('Память', '#ff4a4a'),
             'disk': ('Диск', '#4aff4a'),
-            'network': ('Ethernet', '#ffd700')
+            'network': ('Ethernet', '#ffd700'),
+            'gpu': ('GPU', '#510eed')
         }
         
         for i, (metric, (name, color)) in enumerate(metrics.items()):
@@ -55,65 +54,49 @@ class PerformanceTab(tk.Frame):
                 activeforeground='black',
                 borderwidth=5, 
                 relief='flat',
-                command=lambda m=metric: self.switch_metric(m)
+                command=lambda m=metric: self.switch_metric(m),
+                takefocus=0
             )
 
             btn.bind("<Enter>", lambda e, b=btn, c=color: b.config(bg=c))
             btn.bind("<Leave>", lambda e, b=btn: b.config(bg='#2d2d2d'))
             btn.bind("<Button-1>", lambda e, b=btn, c=color: b.config(bg=c))
             btn.bind("<Button-1>", lambda e, b=btn, c=color: b.config(bg=self.dark_color(c)))
-            btn.grid(row=i, column=0, sticky='ew', padx=2, pady=2, ipadx=50, ipady=5)
+            btn.grid(row=i, column=0, sticky='ew', padx=4, pady=4, ipadx=60, ipady=6)
         
-        # Правая панель с графиком и деталями
         right_panel = tk.Frame(self, bg='#1e1e1e')
         right_panel.grid(row=0, column=1, sticky='nsew')
+        right_panel.grid_rowconfigure(0, weight=0)  
+        right_panel.grid_rowconfigure(1, weight=1)
         
-        # График
         self.chart_title = tk.Label(right_panel, text="ЦП", bg='#1e1e1e', fg='white', 
                                    font=('Arial', 28, 'bold'))
-        self.chart_title.pack(anchor='w', padx=10, pady=(10, 0))
+        self.chart_title.pack(anchor='w', padx=10, pady=(15, 0))
         
-        self.canvas = tk.Canvas(right_panel, bg='#1e1e1e', highlightthickness=0, height=250)
-        self.canvas.pack(fill='x', expand=False, padx=10, pady=10)
+        self.canvas = tk.Canvas(right_panel, bg='#1e1e1e', highlightthickness=0, height=300)  
+        self.canvas.pack(fill='x', expand=False, padx=15, pady=(0, 20))
         
-        # Информационные метки
-        info_frame = tk.Frame(right_panel, bg='#1e1e1e')
-        info_frame.pack(fill='x', padx=10, pady=(0, 10))
-        
-        # Создаем контейнер для меток
-        self.info_labels_container = tk.Frame(info_frame, bg='#1e1e1e')
-        self.info_labels_container.pack(fill='x', expand=True)
         
         self.info_labels = {}
         labels = [
             ('Название: ', ' '),
             ("Использование", "0%"),
             ("Скорость", "0.00"),
+            ('Частота', '0'),
             ("Процессы", "0"),
             ("Потоки", "0"),
             ("Время работы", "0:00:00")
         ]
-        
-        for i, (name, value) in enumerate(labels):
-            frame = tk.Frame(self.info_labels_container, bg='#1e1e1e')
-            frame.grid(row=0, column=i, padx=15)
-            
-            tk.Label(frame, text=name, bg='#1e1e1e', fg='#aaaaaa').pack()
-            self.info_labels[name] = tk.Label(frame, text=value, bg='#1e1e1e', fg='white')
-            self.info_labels[name].pack()
 
-        # Создаем фрейм для деталей под графиком
         self.details_frame = tk.Frame(right_panel, bg='#1e1e1e', highlightbackground="#3c3c3c", highlightthickness=1)
-        self.details_frame.pack(fill='both', expand=True, padx=10, pady=10)
+        self.details_frame.pack(fill='both', expand=True, padx=10, pady=(0, 20))
         
-        # Заголовок деталей
         self.details_header = tk.Label(self.details_frame, font=("Arial", 12, "bold"), 
                                      bg="#1e1e1e", fg="white")
-        self.details_header.pack(anchor="w", padx=10, pady=(15, 1))
+        self.details_header.pack(anchor="w", padx=10, pady=(10, 5))
         
-        # Контейнер для деталей
         self.details_container = tk.Frame(self.details_frame, bg='#1e1e1e')
-        self.details_container.pack(fill="both", expand=True, padx=5)
+        self.details_container.pack(fill="both", expand=True, padx=5, pady=5)
         
     def switch_metric(self, metric):
         self.current_metric = metric
@@ -121,29 +104,30 @@ class PerformanceTab(tk.Frame):
             'cpu': '#3794ff',
             'memory': '#ff4a4a',
             'disk': '#4aff4a',
-            'network': '#ffd700'
+            'network': '#ffd700', 
+            'gpu': '#00FFFF'
         }
         titles = {
             'cpu': 'ЦП',
             'memory': 'Память',
             'disk': 'Диск',
-            'network': 'Ethernet'
+            'network': 'Ethernet',
+            'gpu': 'GPU'
         }
         self.chart_title.config(text=titles[metric])
         self._current_color = colors[metric]
         self.update_chart()
-        
-        # Обновляем информацию в зависимости от выбранной метрики
-        if metric == 'memory':
+    
+        if metric == 'cpu':
+            self._update_cpu_details(self._last_system_info if hasattr(self, '_last_system_info') else {})
+        elif metric == 'memory':
             self._update_memory_details(self._last_system_info if hasattr(self, '_last_system_info') else {})
         elif metric == 'disk':
             self._update_disk_details(self._last_system_info if hasattr(self, '_last_system_info') else {})
         elif metric == 'network':
             self._update_ethernet_details(self._last_system_info if hasattr(self, '_last_system_info') else {})
-        else:
-            # Скрываем детали для CPU
-            if hasattr(self, 'details_frame'):
-                self.details_frame.place_forget()
+        elif metric == 'gpu':
+            self._update_gpu_details(self._last_system_info if hasattr(self, '_last_system_info') else {})
         
     def update_data(self, system_info):
         current_time = time.time()
@@ -151,7 +135,6 @@ class PerformanceTab(tk.Frame):
             return
             
         with self._data_lock:
-            # Сохраняем последние данные системы
             self._last_system_info = system_info
             
             metrics_data = self.calculate_metrics(system_info)
@@ -175,6 +158,7 @@ class PerformanceTab(tk.Frame):
         
         metrics['disk'] = system_info.get('disk_usage', 0.0)
         metrics['network'] = system_info.get('network_usage', 0.0)
+        metrics['gpu'] = system_info.get('gpu_usage', 0.0)
         
         return metrics
         
@@ -186,13 +170,15 @@ class PerformanceTab(tk.Frame):
         height = self.canvas.winfo_height()
         self.canvas.delete('all')
         
-        # Сетка
+        padding = 10
+        chart_width = width - 2*padding
+        chart_height = height - 2*padding
+
         for i in range(0, 101, 20):
-            y = height - (i/100 * (height - 20))
-            self.canvas.create_line(0, y, width, y, fill='#3c3c3c')
-            self.canvas.create_text(5, y, text=f"{i}%", fill='white', anchor='w')
+            y = height - padding - (i/100 * (height - 20))
+            self.canvas.create_line(padding, y, width - padding, y, fill='#3c3c3c')
+            self.canvas.create_text(padding - 5, y, text=f"{i}%", fill='white', anchor='w')
         
-        # График
         values = list(self.values[self.current_metric])
         if len(values) > 1:
             points = []
