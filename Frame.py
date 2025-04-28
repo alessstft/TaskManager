@@ -390,7 +390,7 @@ class TaskManager:
     def __init__(self, root):
         self.root = root
         self.root.title("Диспетчер задач")
-        self.root.geometry("900x700")
+        self.root.geometry("1000x800")
         self.root.configure(bg="#2d2d2d")
         self.is_dark_theme = True
 
@@ -400,7 +400,7 @@ class TaskManager:
         self._process_info = None
         self._data_lock = threading.Lock()
         self._process_selected = False
-        
+
         self._setup_styles()
         self._create_interface()
         
@@ -519,36 +519,61 @@ class TaskManager:
         self.performance_tab.update_data(system_info)
 
     def _update_processes(self, processes):
+        if not processes:  # Если нет данных о процессах
+            self.process_tree.delete(*self.process_tree.get_children())
+            self.process_tree.insert("", "end", values=("Нет данных", "", "", "", "", "", "", ""))
+            return
+        
         if self._process_selected:
             return
-            
-        selected_items = self.process_tree.selection()
-        selected_values = [self.process_tree.item(item)['values'][0] for item in selected_items]
-        self.process_tree.delete(*self.process_tree.get_children())
-        for proc in processes:
-            values = (
-                proc['pid'],
-                proc['name'],
-                f"{proc['cpu_usage']:.1f}%",
-                f"{proc['memory_mb']:.1f} MB",
-                f"{proc['read_kb'] / 1024:.1f} MB",
-                "N/A",
-                "N/A",
-                "Normal"
+        
+        try:
+            selected_items = self.process_tree.selection()
+            selected_pids = {self.process_tree.item(item)['values'][0] for item in selected_items}
+        
+            self.process_tree.delete(*self.process_tree.get_children())
+        
+        # Сортируем процессы по использованию CPU
+            sorted_procs = sorted(processes, key=lambda x: x.get('cpu_usage', 0), reverse=True)
+        
+            for proc in sorted_procs:
+                values = (
+                proc.get('pid', 'N/A'),
+                proc.get('name', 'N/A')[:50],  # Обрезаем длинные имена
+                f"{proc.get('cpu_usage', 0):.1f}%",
+                f"{proc.get('memory_mb', 0):.1f} MB",
+                f"{proc.get('read_kb', 0) / 1024:.1f} MB" if 'read_kb' in proc else "N/A",
+                "N/A",  # Сеть
+                "N/A",  # GPU
+                "Normal"  # Энергопотребление
             )
             item = self.process_tree.insert("", tk.END, values=values)
-            if values[0] in selected_values:
+            if proc.get('pid') in selected_pids:
                 self.process_tree.selection_add(item)
+                
+        except Exception as e:
+            print(f"Ошибка обновления процессов: {e}")
+            self.process_tree.insert("", "end", values=("Ошибка загрузки", "", "", "", "", "", "", ""))
 
     def _update_services(self):
-        self.services_tree.delete(*self.services_tree.get_children())
-        services = self.system_monitor.get_services_info()
-        for service in services:
-            self.services_tree.insert("", tk.END, values=(
-                service['name'],
-                service['process_id'],
-                service['status']
+        try:
+            services = self.system_monitor.get_services_info()
+            if not services:
+                self.services_tree.delete(*self.services_tree.get_children())
+                self.services_tree.insert("", "end", values=("Нет данных", "", ""))
+                return
+            
+            self.services_tree.delete(*self.services_tree.get_children())
+        
+            for service in services:
+                self.services_tree.insert("", tk.END, values=(
+                service.get('name', 'N/A'),
+                service.get('process_id', 'N/A'),
+                service.get('status', 'N/A')
             ))
+        except Exception as e:
+            print(f"Ошибка обновления служб: {e}")
+        self.services_tree.insert("", "end", values=("Ошибка загрузки", "", ""))
 
     def _on_process_select(self, event):
         if self.process_tree.selection():
