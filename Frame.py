@@ -360,6 +360,9 @@ class TaskManager:
 
         self.system_monitor.register_callback(self._update_data_buffer)
         self.system_monitor.start_monitoring()
+
+        self.system_monitor._update_data()
+
         self._update_gui()
         self._schedule_gui_update()
 
@@ -408,7 +411,7 @@ class TaskManager:
         # self.process_tree.bind('<<TreeviewSelect>>', self._on_process_select)
         self.process_tree.bind('<<TreeviewSelect>>', self._on_space)
         self.process_tree.bind('<Button-3>', self.do_popup)
-        self.process_tree.bind('<space>', self._on_right_click)
+        self.process_tree.bind('<space>', self._on_space)
 
         btn_frame = tk.Frame(self.processes_frame, bg="#2d2d2d")
         btn_frame.pack(fill=tk.X, pady=10)
