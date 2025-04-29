@@ -86,7 +86,7 @@ class PerformanceTab(tk.Frame):
         
         # Информационные метки
         info_frame = tk.Frame(right_panel, bg='#1e1e1e')
-        info_frame.pack(fill='x', padx=10, pady=(0, 10))
+        #info_frame.pack(fill='x', padx=10, pady=(0, 10))
         
         # Создаем контейнер для меток
         self.info_labels_container = tk.Frame(info_frame, bg='#1e1e1e')
