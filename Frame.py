@@ -61,8 +61,9 @@ class PerformanceTab(tk.Frame):
                 bg='#2d2d2d',
                 fg='white',
                 activeforeground='black',
-                borderwidth=5, 
+                borderwidth=7, 
                 relief='flat',
+                highlightthickness=0,
                 command=lambda m=metric: self.switch_metric(m)
             )
 
@@ -70,7 +71,7 @@ class PerformanceTab(tk.Frame):
             btn.bind("<Leave>", lambda e, b=btn: b.config(bg='#2d2d2d'))
             btn.bind("<Button-1>", lambda e, b=btn, c=color: b.config(bg=c))
             btn.bind("<Button-1>", lambda e, b=btn, c=color: b.config(bg=self.dark_color(c)))
-            btn.grid(row=i, column=0, sticky='ew', padx=2, pady=2, ipadx=50, ipady=5)
+            btn.grid(row=i, column=0, sticky='ew', padx=4, pady=4, ipadx=60, ipady=6)
         
         # Правая панель с графиком и деталями
         right_panel = tk.Frame(self, bg='#1e1e1e')
