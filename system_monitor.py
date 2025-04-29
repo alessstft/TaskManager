@@ -82,7 +82,7 @@ class NetworksStaticInfoArray(Structure):
     ]
 
 class SystemMonitor:
-    def __init__(self, dll_path: str = "dll2//target//release//sys_info_fn.dll"):
+    def __init__(self, dll_path: str = R"C:\taskmng\TaskManager\dll2\target\debug\sys_info_fn.dll"):
         try:
             self.dll = ctypes.CDLL(dll_path)
         except Exception as e:
@@ -112,7 +112,7 @@ class SystemMonitor:
         self.dll.get_proc_path.restype = c_char_p
 
         
-    def start_monitoring(self, update_interval: float = 2.0):
+    def start_monitoring(self, update_interval: float = 1.0):
         """Запускает мониторинг системы с минимальной нагрузкой."""
         if self._running:
             return
@@ -121,13 +121,13 @@ class SystemMonitor:
         self.dll.start_process_collector()
         
         def update_loop():
-
             while not self._stop_event.is_set():
                 start_time = time.time()
                 self._update_data()
                 elapsed = time.time() - start_time
                 wait_time = max(0, update_interval - elapsed)
-                self._stop_event.wait(wait_time)
+                if wait_time > 0:
+                    time.sleep(wait_time)
                 
         self._update_thread = threading.Thread(target=update_loop, daemon=True)
         self._update_thread.start()
@@ -198,65 +198,89 @@ class SystemMonitor:
         self.dll.free_process_info_array(process_array)
         return processes
         
-    def _get_disk_info(self) -> List[Dict]:
-        disk_array = self.dll.get_disk_static_info_array()
-        disks = []
-        for i in range(disk_array.len):
-            disk = disk_array.data[i]
-            disks.append({
-                'name': disk.name.decode('utf-8'),
-                'total_space': disk.total_space,
-                'available_space': disk.available_space
-            })
-        self.dll.free_disk_static_info_array(disk_array)
-        return disks
-        
-    def _get_network_info(self) -> List[Dict]:
-        network_array = self.dll.get_networks_static_info_array()
-        networks = []
-        current_time = time.time()
-        time_diff = current_time - self._last_update_time
-        if time_diff > 2.0:
-            self._last_network_stats = {}
-            time_diff = 1.0
-        
-        for i in range(network_array.len):
-            network = network_array.data[i]
-            name = network.name.decode('utf-8')
-            current_stats = {
-                'send': network.send,
-                'recive': network.recive,
-                'time': current_time
-            }
-            if name in self._last_network_stats:
-                last_stats = self._last_network_stats[name]
-                send_speed = (current_stats['send'] - last_stats['send']) / time_diff
-                recv_speed = (current_stats['recive'] - last_stats['recive']) / time_diff
-                if send_speed < 0 or send_speed > 1e9:
-                    send_speed = 0
-                if recv_speed < 0 or recv_speed > 1e9:
-                    recv_speed = 0
-            else:
-                send_speed = 0
-                recv_speed = 0
-                
-            networks.append({
-                'name': name,
-                'ipv4': network.ipv4.decode('utf-8') if network.ipv4 else "",
-                'send_speed': send_speed,
-                'recv_speed': recv_speed
-            })
-            self._last_network_stats[name] = current_stats
-            
-        self._last_update_time = current_time
-        self.dll.free_networks_static_info_array(network_array)
-        return networks
-
     def get_disk_info(self) -> List[Dict]:
-        return self._get_disk_info()
+        """Получает информацию о дисках"""
+        try:
+            disk_array = self.dll.get_disk_static_info_array()
+            if disk_array.len == 0 or disk_array.data is None:
+                # print("Debug Python: No disk data received from DLL")
+                return []
+                
+            disks = []
+            for i in range(disk_array.len):
+                disk = disk_array.data[i]
+                disks.append({
+                    'name': disk.name.decode('utf-8'),
+                    'total_space': disk.total_space / (1024 * 1024 * 1024),  # Конвертируем в ГБ
+                    'available_space': disk.available_space / (1024 * 1024 * 1024)  # Конвертируем в ГБ
+                })
+            self.dll.free_disk_static_info_array(disk_array)
+            
+            # if not disks:
+            #     print("Debug Python: No disks found after processing")
+            # else:
+            #     print(f"Debug Python: Successfully processed {len(disks)} disks")
+            #     for disk in disks:
+            #         print(f"Debug Python: Disk {disk['name']}: Total {disk['total_space']:.1f} GB, Available {disk['available_space']:.1f} GB")
+                
+            return disks
+        except Exception as e:
+            # print(f"Debug Python: Error getting disk info: {e}")
+            return []
 
     def get_network_info(self) -> List[Dict]:
-        return self._get_network_info()
+        """Получает информацию о сетевых адаптерах"""
+        try:
+            network_array = self.dll.get_networks_static_info_array()
+            if network_array.len == 0 or network_array.data is None:
+                return []
+                
+            networks = []
+            current_time = time.time()
+            time_diff = current_time - self._last_update_time
+            
+            if time_diff > 2.0:
+                self._last_network_stats = {}
+                time_diff = 1.0
+            
+            for i in range(network_array.len):
+                network = network_array.data[i]
+                name = network.name.decode('utf-8')
+                
+                current_stats = {
+                    'send': network.send,
+                    'recive': network.recive,
+                    'time': current_time
+                }
+                
+                if name in self._last_network_stats and time_diff > 0:
+                    last_stats = self._last_network_stats[name]
+                    send_diff = current_stats['send'] - last_stats['send']
+                    recv_diff = current_stats['recive'] - last_stats['recive']
+                    
+                    send_speed = max(0, send_diff / time_diff)
+                    recv_speed = max(0, recv_diff / time_diff)
+                else:
+                    send_speed = 0
+                    recv_speed = 0
+                    
+                networks.append({
+                    'name': name,
+                    'ipv4': network.ipv4.decode('utf-8') if network.ipv4 else "",
+                    'send_speed': send_speed,
+                    'recv_speed': recv_speed,
+                    'total_sent': current_stats['send'],
+                    'total_received': current_stats['recive']
+                })
+                
+                self._last_network_stats[name] = current_stats
+                
+            self._last_update_time = current_time
+            self.dll.free_networks_static_info_array(network_array)
+            return networks
+            
+        except Exception as e:
+            return []
 
     def get_cpu_percent(self) -> float:
         return self._get_cpu_info()['usage']

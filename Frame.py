@@ -24,10 +24,18 @@ class PerformanceTab(tk.Frame):
             'disk': deque(maxlen=60),
             'network': deque(maxlen=60)
         }
+        self.speeds = {
+            'disk': 0.0,
+            'network': 0.0
+        }
         self.current_metric = 'cpu'
         self._prev_values = {}
         self._last_update = 0
         self._update_interval = 0.5
+        self._prev_disk_info = None
+        self._last_disk_update = time.time()
+        self._prev_network_info = None
+        self._last_network_update = time.time()
 
     def init_ui(self):
         self.grid_rowconfigure(0, weight=1)
@@ -86,7 +94,6 @@ class PerformanceTab(tk.Frame):
         
         self.info_labels = {}
         labels = [
-            ('Название: ', ' '),
             ("Использование", "0%"),
             ("Скорость", "0.00"),
             ("Процессы", "0"),
@@ -96,25 +103,55 @@ class PerformanceTab(tk.Frame):
         
         for i, (name, value) in enumerate(labels):
             frame = tk.Frame(self.info_labels_container, bg='#1e1e1e')
-            frame.grid(row=0, column=i, padx=15)
+            frame.grid(row=0, column=i, padx=15, sticky='w')
             
-            tk.Label(frame, text=name, bg='#1e1e1e', fg='#aaaaaa').pack()
+            tk.Label(frame, text=name, bg='#1e1e1e', fg='#aaaaaa').pack(anchor='w')
             self.info_labels[name] = tk.Label(frame, text=value, bg='#1e1e1e', fg='white')
-            self.info_labels[name].pack()
+            self.info_labels[name].pack(anchor='w')
 
-        # Создаем фрейм для деталей под графиком
-        self.details_frame = tk.Frame(right_panel, bg='#1e1e1e', highlightbackground="#3c3c3c", highlightthickness=1)
-        self.details_frame.pack(fill='both', expand=True, padx=10, pady=10)
+        # Создаем фреймы для деталей каждой метрики
+        self.detail_frames = {}
+        for metric in ['cpu', 'memory', 'disk', 'network']:
+            frame = tk.Frame(right_panel, bg='#1e1e1e', highlightbackground="#3c3c3c", highlightthickness=1)
+            header = tk.Label(frame, font=("Arial", 12, "bold"), bg="#1e1e1e", fg="white")
+            header.pack(anchor="w", padx=10, pady=(15, 1))
+            
+            container = tk.Frame(frame, bg='#1e1e1e')
+            container.pack(fill="both", expand=True, padx=5)
+            
+            self.detail_frames[metric] = {
+                'frame': frame,
+                'header': header,
+                'container': container
+            }
         
-        # Заголовок деталей
-        self.details_header = tk.Label(self.details_frame, font=("Arial", 12, "bold"), 
-                                     bg="#1e1e1e", fg="white")
-        self.details_header.pack(anchor="w", padx=10, pady=(15, 1))
+        # Показываем фрейм CPU по умолчанию
+        self.detail_frames['cpu']['frame'].pack(fill='both', expand=True, padx=10, pady=10)
         
-        # Контейнер для деталей
-        self.details_container = tk.Frame(self.details_frame, bg='#1e1e1e')
-        self.details_container.pack(fill="both", expand=True, padx=5)
+        # Инициализируем начальные данные
+        if hasattr(self, 'system_monitor') and self.system_monitor is not None:
+            self._force_update_all()
+
+    def _force_update_all(self):
+        """Принудительно обновляет данные для всех метрик"""
+        system_info = {
+            'cpu_info': self.system_monitor._get_cpu_info(),
+            'memory_info': self.system_monitor._get_memory_info(),
+            'disk_info': self.system_monitor.get_disk_info()[0] if self.system_monitor.get_disk_info() else None,
+            'network_info': None
+        }
         
+        # Получаем сетевую информацию безопасно
+        network_info = self.system_monitor.get_network_info()
+        if network_info and len(network_info) > 0:
+            system_info['network_info'] = network_info[0]
+        
+        # Обновляем все фреймы с деталями
+        self._update_cpu_details(system_info)
+        self._update_memory_details(system_info)
+        self._update_disk_details(system_info)
+        self._update_ethernet_details(system_info)
+
     def switch_metric(self, metric):
         self.current_metric = metric
         colors = {
@@ -133,19 +170,21 @@ class PerformanceTab(tk.Frame):
         self._current_color = colors[metric]
         self.update_chart()
         
-        # Обновляем информацию в зависимости от выбранной метрики
-        if metric == 'memory':
-            self._update_memory_details(self._last_system_info if hasattr(self, '_last_system_info') else {})
-        elif metric == 'disk':
-            self._update_disk_details(self._last_system_info if hasattr(self, '_last_system_info') else {})
-        elif metric == 'network':
-            self._update_ethernet_details(self._last_system_info if hasattr(self, '_last_system_info') else {})
-        else:
-            # Скрываем детали для CPU
-            if hasattr(self, 'details_frame'):
-                self.details_frame.place_forget()
+        # Скрываем все фреймы с деталями
+        for m in self.detail_frames:
+            self.detail_frames[m]['frame'].pack_forget()
         
+        # Показываем фрейм для текущей метрики
+        self.detail_frames[metric]['frame'].pack(fill='both', expand=True, padx=10, pady=10)
+        
+        # Принудительно обновляем данные
+        self._force_update_all()
+
     def update_data(self, system_info):
+        """Обновляет данные производительности во всех фреймах"""
+        if not system_info:
+            return
+            
         current_time = time.time()
         if current_time - self._last_update < self._update_interval:
             return
@@ -154,29 +193,95 @@ class PerformanceTab(tk.Frame):
             # Сохраняем последние данные системы
             self._last_system_info = system_info
             
+            # Вычисляем метрики
             metrics_data = self.calculate_metrics(system_info)
-            for metric, value in metrics_data.items():   
-                self.values[metric].append(value)
             
+            # Обновляем значения для графиков
+            for metric, value in metrics_data.items():
+                if metric in self.values:
+                    self.values[metric].append(float(value))
+                    
+            # Принудительно обновляем все данные
+            self._force_update_all()
+            
+            # Обновляем метки
             if self.current_metric in metrics_data:
-                self.update_chart()
+                current_value = metrics_data[self.current_metric]
+                self.info_labels["Использование"].config(text=f"{current_value:.1f}%")
                 
-            self.update_labels(system_info, metrics_data)
-            self._last_update = current_time
+            # Обновляем количество процессов и потоков
+            self.info_labels["Процессы"].config(text=str(system_info.get('process_count', 0)))
+            self.info_labels["Потоки"].config(text=str(system_info.get('thread_count', 0)))
             
+            # Обновляем время работы
+            uptime = system_info.get('uptime', 0)
+            hours = int(uptime // 3600)
+            minutes = int((uptime % 3600) // 60)
+            seconds = int(uptime % 60)
+            self.info_labels["Время работы"].config(text=f"{hours:02d}:{minutes:02d}:{seconds:02d}")
+            
+            # Обновляем график
+            self.update_chart()
+            
+            self._last_update = current_time
+
     def calculate_metrics(self, system_info):
-        metrics = {}
-        metrics['cpu'] = system_info.get('cpu_percent', 0.0)
-        
-        memory = system_info.get('memory', {})
-        total_memory = memory.get('total', 1)
-        used_memory = total_memory - memory.get('available', 0)
-        metrics['memory'] = (used_memory / total_memory) * 100 if total_memory > 0 else 0.0
-        
-        metrics['disk'] = system_info.get('disk_usage', 0.0)
-        metrics['network'] = system_info.get('network_usage', 0.0)
-        
-        return metrics
+        """Вычисляет метрики для графиков"""
+        try:
+            # Получаем текущую информацию о сети
+            network_info = self.system_monitor.get_network_info()
+            network_metric = 0.0
+            
+            if network_info and len(network_info) > 0:
+                # Суммируем скорости по всем интерфейсам
+                total_send = sum(net.get('send_speed', 0) for net in network_info)
+                total_recv = sum(net.get('recv_speed', 0) for net in network_info)
+                
+                # Обновляем информацию в сетевой панели
+                net = network_info[0]
+                if "Скорость" in self.info_labels:
+                    self.info_labels["Скорость"].config(text=f"{(net['send_speed'] + net['recv_speed'])/1024:.1f} КБ/с")
+                
+                # Конвертируем в Мбит/с (из байт/с)
+                total_speed_mbps = (total_send + total_recv) * 8 / 1_000_000
+                
+                # Масштабируем для графика (100 Мбит/с = 100%)
+                network_metric = min(100, total_speed_mbps)
+            
+            # Получаем актуальные данные CPU и памяти
+            cpu_percent = self.system_monitor.get_cpu_percent()
+            memory_percent = self.system_monitor.get_memory_percent()
+            
+            # Получаем информацию о диске
+            disk_info = self.system_monitor.get_disk_info()
+            disk_percent = 0.0
+            if disk_info and len(disk_info) > 0:
+                total = disk_info[0]['total_space']
+                available = disk_info[0]['available_space']
+                if total > 0:
+                    disk_percent = ((total - available) / total) * 100
+            
+            # Обновляем значения для графиков
+            self.values['cpu'].append(cpu_percent)
+            self.values['memory'].append(memory_percent)
+            self.values['disk'].append(disk_percent)
+            self.values['network'].append(network_metric)
+            
+            return {
+                'cpu': cpu_percent,
+                'memory': memory_percent,
+                'disk': disk_percent,
+                'network': network_metric
+            }
+            
+        except Exception as e:
+            self._metrics = [0] * 4
+            return {
+                'cpu': 0.0,
+                'memory': 0.0,
+                'disk': 0.0,
+                'network': 0.0
+            }
         
     def update_chart(self):
         if not hasattr(self, '_current_color'):
@@ -184,46 +289,150 @@ class PerformanceTab(tk.Frame):
             
         width = self.canvas.winfo_width()
         height = self.canvas.winfo_height()
+        
+        if width <= 1 or height <= 1:  # Пропускаем обновление если размеры невалидные
+            return
+            
         self.canvas.delete('all')
         
-        # Сетка
-        for i in range(0, 101, 20):
-            y = height - (i/100 * (height - 20))
-            self.canvas.create_line(0, y, width, y, fill='#3c3c3c')
-            self.canvas.create_text(5, y, text=f"{i}%", fill='white', anchor='w')
+        # Отступы для графика
+        padding_left = 40   # Отступ слева для меток
+        padding_right = 10  # Отступ справа
+        padding_top = 30    # Увеличили отступ сверху для названия
+        padding_bottom = 30 # Отступ снизу для меток времени
         
+        # Добавляем название устройства
+        device_name = ""
+        if self.current_metric == 'disk':
+            disk_info = self.system_monitor.get_disk_info()
+            if disk_info and len(disk_info) > 0:
+                device_name = f"Диск {disk_info[0]['name']}"
+        elif self.current_metric == 'network':
+            network_info = self.system_monitor.get_network_info()
+            if network_info and len(network_info) > 0:
+                device_name = network_info[0]['name']
+                
+        if device_name:
+            self.canvas.create_text(
+                padding_left,
+                padding_top - 15,
+                text=device_name,
+                fill='white',
+                anchor='w',
+                font=('Arial', 10, 'bold')
+            )
+        
+        # Рабочая область графика
+        chart_width = width - padding_left - padding_right
+        chart_height = height - padding_top - padding_bottom
+        
+        # Цвета для разных метрик
+        colors = {
+            'cpu': '#3794ff',
+            'memory': '#ff4a4a',
+            'disk': '#4aff4a',
+            'network': '#ffd700'
+        }
+        self._current_color = colors[self.current_metric]
+        
+        # Сетка и метки
+        for i in range(0, 101, 20):
+            y = padding_top + ((100 - i) / 100 * chart_height)
+            self.canvas.create_line(
+                padding_left, y, 
+                width - padding_right, y, 
+                fill='#3c3c3c', 
+                dash=(2, 4)
+            )
+            self.canvas.create_text(
+                padding_left - 5, y,
+                text=f"{i}%",
+                fill='white',
+                anchor='e'
+            )
+            
+        # Временная шкала
+        time_marks = ['50с', '40с', '30с', '20с', '10с', '0с']
+        for i, mark in enumerate(time_marks):
+            x = padding_left + (i * chart_width / (len(time_marks) - 1))
+            self.canvas.create_line(
+                x, padding_top,
+                x, height - padding_bottom,
+                fill='#3c3c3c',
+                dash=(2, 4)
+            )
+            self.canvas.create_text(
+                x, height - padding_bottom + 15,
+                text=mark,
+                fill='white',
+                anchor='n'
+            )
+            
         # График
         values = list(self.values[self.current_metric])
-        if len(values) > 1:
+        if values:  # Проверяем, что есть данные для отображения
             points = []
+            step = chart_width / 60  # 60 точек данных
+            
             for i, value in enumerate(values):
-                x = (i / (len(values)-1)) * (width - 20) + 10
-                y = height - (value/100 * (height - 20))
+                x = padding_left + (len(values) - i - 1) * step
+                value = min(100, max(0, float(value)))
+                y = padding_top + ((100 - value) / 100 * chart_height)
                 points.extend([x, y])
             
-            self.canvas.create_line(points, fill=self._current_color, width=2, smooth=True)
-    
-    def update_labels(self, system_info, metrics_data):
-        cpu_percent = metrics_data.get('cpu', 0)
-        self.info_labels["Использование"].config(text=f"{cpu_percent:.1f}%")
-        self.info_labels["Процессы"].config(text=str(system_info.get('process_count', 0)))
-        self.info_labels["Потоки"].config(text=str(system_info.get('thread_count', 0)))
+            if len(points) >= 4:  # Минимум 2 точки для создания линии
+                # Создаем градиент под линией графика
+                gradient_points = points.copy()
+                gradient_points.extend([
+                    points[-2], height - padding_bottom,
+                    points[0], height - padding_bottom
+                ])
+                
+                # Создаем градиент
+                fill_color = self._current_color[:-2] + '40'  # Добавляем прозрачность
+                self.canvas.create_polygon(gradient_points, fill=fill_color, outline='')
+                
+                # Рисуем основную линию графика
+                self.canvas.create_line(
+                    points,
+                    fill=self._current_color,
+                    width=2,
+                    smooth=True
+                )
+                
+                # Добавляем точку текущего значения
+                if values:
+                    current_x = points[-2]
+                    current_y = points[-1]
+                    self.canvas.create_oval(
+                        current_x - 3, current_y - 3,
+                        current_x + 3, current_y + 3,
+                        fill=self._current_color,
+                        outline='white'
+                    )
+
+    def _update_cpu_details(self, system_info):
+        """Обновляет панель с детальной информацией о процессоре"""
+        if not hasattr(self, 'system_monitor') or self.system_monitor is None:
+            return
+
+        cpu_info = self.system_monitor._get_cpu_info()
         
-        # Форматируем время работы
-        uptime = system_info.get('uptime', 0)
-        hours = int(uptime // 3600)
-        minutes = int((uptime % 3600) // 60)
-        seconds = int(uptime % 60)
-        self.info_labels["Время работы"].config(text=f"{hours}:{minutes:02d}:{seconds:02d}")
+        labels = [
+            ("Название", cpu_info['brand']),
+            ("Базовая скорость", f"{cpu_info['frequency']:.2f} GHz"),
+            ("Ядра", str(cpu_info['core_count'])),
+            ("Загруженность", f"{cpu_info['usage']:.1f}%"),
+            ("Процессы", str(cpu_info['process_count'])),
+            ("Потоки", str(cpu_info['core_count'] * 2)),
+            ("Время работы", self._format_uptime(cpu_info['work_time'])),
+            ("Виртуализация", "Включено"),
+            ("L1 кэш", "384 КБ"),
+            ("L2 кэш", "1.5 МБ")
+        ]
         
-        # Если текущая метрика - память, показываем детальную информацию
-        if self.current_metric == 'memory':
-            self._update_memory_details(system_info)
-        else:
-            # Если не память - скрываем детали
-            if hasattr(self, 'details_frame'):
-                self.details_frame.place_forget()
-    
+        self._update_details('cpu', "Характеристики ЦП", labels)
+
     def _update_memory_details(self, system_info):
         """Обновляет панель с детальной информацией о памяти"""
         if not hasattr(self, 'system_monitor') or self.system_monitor is None:
@@ -233,97 +442,137 @@ class PerformanceTab(tk.Frame):
         total_gb = memory_info['total'] / (1024**3)
         used_gb = memory_info['used'] / (1024**3)
         available_gb = memory_info['available'] / (1024**3)
+        cached = (memory_info['total'] - memory_info['available'] - memory_info['used']) / (1024**3)
         
-        # Обновляем метки с актуальными данными
         labels = [
-            ("Используется (сжатая)", f"{used_gb:.1f} ГБ (188 МБ)"),
+            ("Используется (сжатая)", f"{used_gb:.1f} ГБ"),
             ("Доступно", f"{available_gb:.1f} ГБ"),
             ("Скорость:", f"{memory_info['speed']} МГц"),
             ("Выделено", f"{used_gb:.1f}/{total_gb:.1f} ГБ"),
-            ("Кэшировано", "1,1 ГБ"),
-            ("Использовано гнезд:", "2 из 4"),
-            ("Выгружаемый пул", "315 МБ"),
-            ("Невыгружаемый пул", "184 МБ"),
-            ("Форм-фактор:", "DIMM"),
-            ("Зарезервировано аппаратно:", "95,1 МБ")
+            ("Кэшировано", f"{cached:.1f} ГБ"),
+            ("Использовано гнезд:", f"{memory_info.get('slots_used', 'N/A')}"),
+            ("Выгружаемый пул", f"{(memory_info.get('pageable_pool', 0) / (1024**2)):.0f} МБ"),
+            ("Невыгружаемый пул", f"{(memory_info.get('non_pageable_pool', 0) / (1024**2)):.0f} МБ"),
+            ("Форм-фактор:", memory_info.get('form_factor', 'DIMM')),
+            ("Зарезервировано аппаратно:", f"{(memory_info.get('hardware_reserved', 0) / (1024**2)):.1f} МБ")
         ]
         
-        self._update_details("Использование памяти", labels)
+        self._update_details('memory', "Использование памяти", labels)
 
     def _update_disk_details(self, system_info):
+        """Обновляет панель с детальной информацией о диске"""
         if not hasattr(self, 'system_monitor') or self.system_monitor is None:
-            return  # Прекращаем выполнение, если system_monitor не задан
+            return  
 
         disk_info = self.system_monitor.get_disk_info()
-        if not disk_info:  # Проверяем, что данные есть
+        if not disk_info or len(disk_info) == 0:
+            labels = [
+                ("Имя диска", "Не обнаружено"),
+                ("Тип диска", "Н/Д"),
+                ("Размер", "0.0 ГБ"),
+                ("Свободно", "0.0 ГБ"),
+                ("Занято", "0.0 ГБ (0%)"),
+                ("Файловая система", "Н/Д"),
+                ("Состояние", "Н/Д"),
+                ("Активность", "0%")
+            ]
+            self._update_details('disk', "Использование диска", labels)
             return
 
-        disk_info = disk_info[0]  # Берем первый диск
-        total_gb = disk_info['total_space'] / (1024**3)
-        available_gb = disk_info['available_space'] / (1024**3)
+        disk = disk_info[0]
+        total_gb = disk['total_space']
+        available_gb = disk['available_space']
         used_gb = total_gb - available_gb
-        
+        used_percent = (used_gb / total_gb) * 100 if total_gb > 0 else 0
+
         labels = [
-            ("Активное время", "0%"),
-            ("Средняя скорость отклика", "0 мс"),
-            ("Скорость записи", "0 КБ/с"),
-            ("Скорость чтения", "0 КБ/с"),
-            ("Активное время записи", "0%"),
-            ("Активное время чтения", "0%"),
-            ("Размер раздела", f"{total_gb:.1f} ГБ"),
-            ("Свободно места", f"{available_gb:.1f} ГБ"),
-            ("Используется места", f"{used_gb:.1f} ГБ"),
-            ("Тип раздела", "NTFS")
+            ("Имя диска", disk['name']),
+            ("Тип диска", "SSD" if "SSD" in disk['name'].upper() else "HDD"),
+            ("Размер", f"{total_gb:.1f} ГБ"),
+            ("Свободно", f"{available_gb:.1f} ГБ"),
+            ("Занято", f"{used_gb:.1f} ГБ ({used_percent:.1f}%)"),
+            ("Файловая система", "NTFS"),
+            ("Состояние", "Исправен"),
+            ("Активность", f"{used_percent:.1f}%")
         ]
-        
-        self._update_details(f"Диск ({disk_info['name']})", labels)
+            
+        self._update_details('disk', "Использование диска", labels)
 
     def _update_ethernet_details(self, system_info):
+        """Обновляет панель с детальной информацией о сети"""
         if not hasattr(self, 'system_monitor') or self.system_monitor is None:
-            return  # Прекращаем выполнение, если system_monitor не задан
+            return  
 
         network_info = self.system_monitor.get_network_info()
-        if not network_info:  # Проверяем, что данные есть
-            network_info = []
-
+        if not network_info or len(network_info) == 0:
+            # Устанавливаем значения по умолчанию если нет данных
             labels = [
-                ("Отправлено", f"{network_info['send_speed']/1024:.1f} КБ/с"),
-                ("Получено", f"{network_info['recv_speed']/1024:.1f} КБ/с"),
-                ("Скорость соединения", "1.0 Гбит/с"),
-                ("Состояние", "Подключено"),
-                ("IPv4-адрес", network_info['ipv4']),
-                ("Тип адаптера", "Ethernet"),
-                ("DNS-сервер", "8.8.8.8"),
-                ("Шлюз по умолчанию", "192.168.1.1"),
-                ("Маска подсети", "255.255.255.0"),
-                ("DHCP", "Включен")
+                ("Сетевой адаптер", "Не обнаружено"),
+                ("Состояние", "Отключено"),
+                ("IP адрес", "Нет подключения"),
+                ("Скорость соединения", "Н/Д"),
+                ("Получено", "0.0 Б/с"),
+                ("Отправлено", "0.0 Б/с"),
+                ("Общая скорость", "0.0 Б/с"),
+                ("Тип подключения", "Н/Д"),
+                ("MTU", "Н/Д"),
+                ("Протокол", "Н/Д")
             ]
-        else:
-            labels = [("Состояние", "Не подключено")]
-            
-        self._update_details("Ethernet", labels)
+            self._update_details('network', "Использование сети", labels)
+            return
 
-    def _update_details(self, header_text, labels):
-        """Обновляет содержимое панели деталей"""
-        # Обновляем заголовок
-        self.details_header.config(text=header_text)
+        network = network_info[0]
+        
+        # Форматируем скорости
+        def format_speed(speed_bytes):
+            if speed_bytes < 1024:
+                return f"{speed_bytes:.1f} Б/с"
+            elif speed_bytes < 1024*1024:
+                return f"{speed_bytes/1024:.1f} КБ/с"
+            else:
+                return f"{speed_bytes/1024/1024:.1f} МБ/с"
+
+        labels = [
+            ("Сетевой адаптер", network['name']),
+            ("Состояние", "Подключено" if network['ipv4'] else "Отключено"),
+            ("IP адрес", network['ipv4'] if network['ipv4'] else "Нет подключения"),
+            ("Скорость соединения", "1.0 Гбит/с"),
+            ("Получено", format_speed(network['recv_speed'])),
+            ("Отправлено", format_speed(network['send_speed'])),
+            ("Общая скорость", format_speed(network['send_speed'] + network['recv_speed'])),
+            ("Тип подключения", "Ethernet"),
+            ("MTU", "1500"),
+            ("Протокол", "IPv4")
+        ]
+            
+        self._update_details('network', "Использование сети", labels)
+
+    def _update_details(self, metric, header_text, labels):
+        """Обновляет содержимое панели деталей для конкретной метрики"""
+        frame_info = self.detail_frames[metric]
+        frame_info['header'].config(text=header_text)
         
         # Очищаем старые метки
-        for widget in self.details_container.winfo_children():
+        for widget in frame_info['container'].winfo_children():
             widget.destroy()
         
         # Создаем новые метки
         for i, (name, value) in enumerate(labels):
             row = i // 2
             col = i % 2
-            frame = tk.Frame(self.details_container, bg='#1e1e1e')
+            frame = tk.Frame(frame_info['container'], bg='#1e1e1e')
             frame.grid(row=row, column=col, sticky='w', padx=10, pady=5)
             
             tk.Label(frame, text=name, bg='#1e1e1e', fg='#aaaaaa', anchor='w', width=25).pack(side='top', fill='x')
             tk.Label(frame, text=value, bg='#1e1e1e', fg='white', anchor='w', width=25, 
                     font=("Arial", 10, "bold")).pack(side='top', fill='x')
-        
-        self.details_frame.lift()
+
+    def _format_uptime(self, seconds):
+        """Форматирует время работы в читаемый формат"""
+        hours = int(seconds // 3600)
+        minutes = int((seconds % 3600) // 60)
+        seconds = int(seconds % 60)
+        return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
 
     def dark_color(self, color):
         r = int(color[1:3], 16)
@@ -408,10 +657,11 @@ class TaskManager:
             self.process_tree.column(col, width=80, anchor="center")
         self.process_tree.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         
-        # self.process_tree.bind('<<TreeviewSelect>>', self._on_process_select)
-        self.process_tree.bind('<<TreeviewSelect>>', self._on_space)
+        # Привязываем события
+        self.process_tree.bind('<<TreeviewSelect>>', self._on_process_select)
         self.process_tree.bind('<Button-3>', self.do_popup)
         self.process_tree.bind('<space>', self._on_space)
+        self._last_click_time = 0
 
         btn_frame = tk.Frame(self.processes_frame, bg="#2d2d2d")
         btn_frame.pack(fill=tk.X, pady=10)
@@ -452,32 +702,40 @@ class TaskManager:
         cpu_info = self.system_monitor._get_cpu_info()
         memory_info = self.system_monitor._get_memory_info()
         disk_info = self.system_monitor.get_disk_info()
+        network_info = self.system_monitor.get_network_info()
         
         # Format the data for the performance tab
         system_info = {
             'cpu_percent': cpu_info['usage'],
+            'cpu_frequency': cpu_info['frequency'],
             'memory': {
-                'total': memory_info['total'] / (1024 * 1024 * 1024),  # Convert to GB
-                'available': memory_info['available'] / (1024 * 1024 * 1024)  # Convert to GB
+                'total': memory_info['total'],
+                'available': memory_info['available']
             },
-            'disk_usage': disk_info[0]['percent'] if disk_info and 'percent' in disk_info[0] else 
-                          (1 - disk_info[0]['available_space'] / disk_info[0]['total_space']) * 100 if disk_info else 0,
-            'network_usage': 0,  # Will be updated with proper calculation
+            'memory_speed': memory_info['speed'],
+            'disk_usage': ((disk_info[0]['total_space'] - disk_info[0]['available_space']) / disk_info[0]['total_space'] * 100) if disk_info else 0,
+            'network_usage': network_info[0]['send_speed'] + network_info[0]['recv_speed'] if network_info else 0,
             'process_count': cpu_info['process_count'],
-            'thread_count': 0,  # This information might not be directly available from the DLL
-            'uptime': cpu_info['work_time']
+            'thread_count': cpu_info.get('core_count', 0),
+            'uptime': cpu_info['work_time'],
+            'cpu_info': cpu_info,
+            'memory_info': memory_info,
+            'disk_info': disk_info[0] if disk_info else None,
+            'network_info': network_info[0] if network_info else None
         }
-        
 
         self.performance_tab.update_data(system_info)
 
     def _update_processes(self, processes):
+        """Обновление списка процессов с учетом выделения"""
         if self._process_selected:
             return
             
         selected_items = self.process_tree.selection()
         selected_values = [self.process_tree.item(item)['values'][0] for item in selected_items]
+        
         self.process_tree.delete(*self.process_tree.get_children())
+        
         for proc in processes:
             values = (
                 proc['pid'],
@@ -504,12 +762,18 @@ class TaskManager:
             ))
 
     def _on_process_select(self, event):
-        if self.process_tree.selection():
-            self._process_selected = True
-        else:
-            self._process_selected = False
+        """Обработчик выделения процесса"""
+        current_time = time.time()
+        # Проверяем, было ли это действие вызвано пробелом
+        if event.state == 0 and current_time - self._last_click_time > 0.1:  # Защита от двойного срабатывания
+            self._last_click_time = current_time
+            if self.process_tree.selection():
+                self._process_selected = True
+            else:
+                self._process_selected = False
 
     def _on_space(self, event):
+        """Обработчик нажатия пробела для снятия выделения"""
         self.process_tree.selection_remove(self.process_tree.selection())
         self._process_selected = False
 

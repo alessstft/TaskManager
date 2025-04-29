@@ -5,12 +5,43 @@ use std::sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 use lazy_static::lazy_static;
-use local_ipaddress;
+use local_ip_address::local_ip;
 use sysinfo::NetworkExt;
 use std::process::Command;
-// Для NVML
-use nvml_wrapper::NVML;
+use nvml_wrapper::Nvml;
 use nvml_wrapper::enum_wrappers::device::TemperatureSensor;
+use winapi::shared::winerror::ERROR_SUCCESS;
+use winapi::um::iphlpapi::GetIfTable;
+use winapi::shared::minwindef::DWORD;
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+struct MIB_IFROW {
+    wszName: [u16; 256],
+    dwIndex: DWORD,
+    dwType: DWORD,
+    dwMtu: DWORD,
+    dwSpeed: DWORD,
+    dwPhysAddrLen: DWORD,
+    bPhysAddr: [u8; 8],
+    dwAdminStatus: DWORD,
+    dwOperStatus: DWORD,
+    dwLastChange: DWORD,
+    dwInOctets: DWORD,
+    dwInUcastPkts: DWORD,
+    dwInNUcastPkts: DWORD,
+    dwInDiscards: DWORD,
+    dwInErrors: DWORD,
+    dwInUnknownProtos: DWORD,
+    dwOutOctets: DWORD,
+    dwOutUcastPkts: DWORD,
+    dwOutNUcastPkts: DWORD,
+    dwOutDiscards: DWORD,
+    dwOutErrors: DWORD,
+    dwOutQLen: DWORD,
+    dwDescrLen: DWORD,
+    bDescr: [u8; 256]
+}
 
 // ========================
 //  Структуры для NVIDIA
@@ -35,7 +66,7 @@ pub struct NvidiaGpuInfoArray {
 #[no_mangle]
 pub extern "C" fn get_nvidia_gpu_info_array() -> NvidiaGpuInfoArray {
     // Пытаемся инициализировать NVML
-    let nvml = match NVML::init() {
+    let nvml = match Nvml::init() {
         Ok(n) => n,
         Err(_e) => {
             return NvidiaGpuInfoArray {
@@ -343,21 +374,46 @@ pub struct DiskStaticInfoArray {
 
 #[no_mangle]
 pub extern "C" fn get_disk_static_info_array() -> DiskStaticInfoArray {
-    let mut sys = SYS.lock().unwrap();
-    sys.refresh_disks();
+    let mut sys = match SYS.lock() {
+        Ok(mut guard) => guard,
+        Err(_) => {
+            // println!("Debug Rust: Failed to acquire SYS lock");
+            return DiskStaticInfoArray { data: std::ptr::null_mut(), len: 0 }
+        }
+    };
+    
+    sys.refresh_all();
+    sys.refresh_disks_list();
     let disks = sys.disks();
-    let len = disks.len();
-    let mut vec: Vec<DiskStaticInfo> = Vec::with_capacity(len);
-    for disk in disks {
-        let name = disk.name().to_string_lossy().to_string();
-        vec.push(DiskStaticInfo {
-            name: CString::new(name).unwrap().into_raw(),
-            total_space: disk.total_space() / (1024 * 1024 * 1024),
-            available_space: disk.available_space() / (1024 * 1024 * 1024),
-        });
+    let disk_count = disks.len();
+    
+    if disk_count == 0 {
+        // println!("Debug Rust: No disks found");
+        return DiskStaticInfoArray { data: std::ptr::null_mut(), len: 0 };
     }
+    
+    // println!("Debug Rust: Found {} disks", disk_count);
+    
+    let mut vec: Vec<DiskStaticInfo> = Vec::with_capacity(disk_count);
+    for disk in disks.iter() {
+        let name = disk.name().to_string_lossy().to_string();
+        // println!("Debug Rust: Processing disk {}", name);
+        // println!("Debug Rust: - Total space: {} bytes", disk.total_space());
+        // println!("Debug Rust: - Available space: {} bytes", disk.available_space());
+        
+        let info = DiskStaticInfo {
+            name: CString::new(name).unwrap().into_raw(),
+            total_space: disk.total_space(),
+            available_space: disk.available_space(),
+        };
+        vec.push(info);
+    }
+    
+    let len = vec.len();
     let data_ptr = vec.as_mut_ptr();
     std::mem::forget(vec);
+    
+    // println!("Debug Rust: Successfully created DiskStaticInfoArray with {} disks", len);
     DiskStaticInfoArray { data: data_ptr, len }
 }
 
@@ -392,24 +448,90 @@ pub struct NetworksStaticInfoArray {
 
 #[no_mangle]
 pub extern "C" fn get_networks_static_info_array() -> NetworksStaticInfoArray {
-    let mut sys = SYS.lock().unwrap();
+    let mut sys = match SYS.lock() {
+        Ok(mut guard) => guard,
+        Err(_) => {
+            return NetworksStaticInfoArray { data: std::ptr::null_mut(), len: 0 }
+        }
+    };
+
+    // Обновляем информацию о сети
+    sys.refresh_all();
+    sys.refresh_networks_list();
     sys.refresh_networks();
-    let networks = sys.networks();
-    let len = networks.iter().count();
-    let mut vec: Vec<NetworksStaticInfo> = Vec::with_capacity(len);
-    let local_ip = local_ipaddress::get().unwrap_or("0.0.0.0".to_string());
-    for (iface_name, network) in networks {
-        let name = iface_name.to_string();
-        vec.push(NetworksStaticInfo {
-            name: CString::new(name).unwrap().into_raw(),
-            ipv4: CString::new(local_ip.clone()).unwrap().into_raw(),
-            send: network.transmitted(),
-            recive: network.received(),
-        });
+
+    let mut active_interfaces = Vec::new();
+
+    // Сначала пробуем через WinAPI
+    unsafe {
+        let mut table_size: DWORD = 0;
+        GetIfTable(std::ptr::null_mut(), &mut table_size, 1);
+        
+        if table_size > 0 {
+            let mut table: Vec<MIB_IFROW> = Vec::with_capacity(table_size as usize);
+            let table_ptr = table.as_mut_ptr();
+            
+            if GetIfTable(table_ptr as *mut _, &mut table_size, 1) == ERROR_SUCCESS {
+                let interfaces = std::slice::from_raw_parts(table_ptr, table_size as usize);
+                
+                for interface in interfaces.iter() {
+                    // Пропускаем неактивные интерфейсы и loopback
+                    if interface.dwOperStatus != 1 || interface.dwType == 24 {
+                        continue;
+                    }
+
+                    let name = String::from_utf8_lossy(&interface.bDescr[..interface.dwDescrLen as usize]).to_string();
+
+                    // Пропускаем виртуальные адаптеры
+                    if name.contains("Virtual") || name.contains("VirtualBox") || name.contains("VMware") {
+                        continue;
+                    }
+
+                    // Добавляем интерфейс даже если нет активности
+                    active_interfaces.push((name, interface.dwOutOctets as u64, interface.dwInOctets as u64));
+                }
+            }
+        }
     }
-    let data_ptr = vec.as_mut_ptr();
-    std::mem::forget(vec);
-    NetworksStaticInfoArray { data: data_ptr, len }
+
+    // Если через WinAPI не нашли интерфейсы, используем sysinfo
+    if active_interfaces.is_empty() {
+        for (iface_name, network) in sys.networks().iter() {
+            if iface_name.contains("Virtual") || iface_name.contains("VirtualBox") || iface_name.contains("VMware") {
+                continue;
+            }
+            active_interfaces.push((
+                iface_name.to_string(),
+                network.transmitted(),
+                network.received()
+            ));
+        }
+    }
+
+    // Если нашли хотя бы один интерфейс
+    if !active_interfaces.is_empty() {
+        let local_ip = local_ip().unwrap_or_else(|_| {
+            std::net::IpAddr::V4(std::net::Ipv4Addr::new(127, 0, 0, 1))
+        });
+
+        let mut vec = Vec::new();
+        for (name, sent, received) in active_interfaces {
+            let info = NetworksStaticInfo {
+                name: CString::new(name).unwrap().into_raw(),
+                ipv4: CString::new(local_ip.to_string()).unwrap().into_raw(),
+                send: sent,
+                recive: received,
+            };
+            vec.push(info);
+        }
+
+        let len = vec.len();
+        let data_ptr = vec.as_mut_ptr();
+        std::mem::forget(vec);
+        NetworksStaticInfoArray { data: data_ptr, len }
+    } else {
+        NetworksStaticInfoArray { data: std::ptr::null_mut(), len: 0 }
+    }
 }
 
 #[no_mangle]

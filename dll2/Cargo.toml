@@ -4,15 +4,29 @@ version = "0.1.0"
 edition = "2021"
 
 [lib]
+name = "sys_info_fn"
 crate-type = ["cdylib"]
 
 [dependencies]
-sysinfo = "0.29"
+sysinfo = "0.29.11"
+lazy_static = "1.4.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-lazy_static = "1.4"
-libc = "0.2"
-num_cpus = "1.15"
-local_ipaddress = "0.1.2"
-winapi = { version = "0.3", features = ["winuser", "processthreadsapi", "psapi", "handleapi"] }
-nvml-wrapper = "0.7"
+nvml-wrapper = "0.9.0"
+local-ip-address = "0.5.7"
+num_cpus = "1.16.0"
+
+[dependencies.winapi]
+version = "0.3.9"
+features = [
+    "processthreadsapi",
+    "psapi",
+    "handleapi",
+    "winnt",
+    "minwindef",
+    "winerror",
+    "iphlpapi",
+]
+
+[build-dependencies]
+cc = "1.0"
